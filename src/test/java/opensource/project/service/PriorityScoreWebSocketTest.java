@@ -1,16 +1,14 @@
 package opensource.project.service;
 
-import opensource.project.domain.CCTV;
-import opensource.project.domain.Detection;
-import opensource.project.domain.Location;
-import opensource.project.domain.Survivor;
-import opensource.project.domain.enums.*;
+import opensource.project.domain.*;
+import opensource.project.domain.enums.CCTVStatus;
+import opensource.project.domain.enums.CurrentStatus;
+import opensource.project.domain.enums.DetectionMethod;
+import opensource.project.domain.enums.DetectionType;
+import opensource.project.domain.enums.RescueStatus;
 import opensource.project.dto.AIDetectionResultDto;
 import opensource.project.dto.PriorityScoreHistoryDto;
-import opensource.project.repository.CCTVRepository;
-import opensource.project.repository.DetectionRepository;
-import opensource.project.repository.LocationRepository;
-import opensource.project.repository.SurvivorRepository;
+import opensource.project.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

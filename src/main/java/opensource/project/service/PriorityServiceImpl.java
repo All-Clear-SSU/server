@@ -1,6 +1,5 @@
 package opensource.project.service;
 
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import opensource.project.domain.Detection;
@@ -30,6 +29,7 @@ public class PriorityServiceImpl implements PriorityService {
     private final SurvivorRepository survivorRepository;
     private final DetectionRepository detectionRepository;
     private final WebSocketService webSocketService;
+    private final RiskScoreCalculator riskScoreCalculator;
 
     // 생존자의 분석 점수 생성
     @Override
@@ -142,7 +142,7 @@ public class PriorityServiceImpl implements PriorityService {
         return PriorityAssessmentRequestDto.builder()
                 .survivorId(survivorId)
                 .detectionId(detectionId)
-                .assessedAt(java.time.LocalDateTime.now())
+                .assessedAt(LocalDateTime.now())
                 .statusScore(statusScore)
                 .environmentScore(environmentScore)
                 .confidenceCoefficient(confidenceCoefficient)
@@ -167,8 +167,9 @@ public class PriorityServiceImpl implements PriorityService {
 
         LocalDateTime now = LocalDateTime.now();
 
-        // 위험도 점수 계산
-        ScoreResult scoreResult = calculateRiskScore(humanDetection, allDetections, summary);
+        // 위험도 점수 계산 (RiskScoreCalculator로 위임)
+        RiskScoreCalculator.ScoreResult scoreResult =
+                riskScoreCalculator.calculateRiskScore(humanDetection, allDetections, summary);
         double statusScore = scoreResult.getStatusScore();
         double environmentScore = scoreResult.getEnvironmentMultiplier();
         double confidenceCoefficient = humanDetection.getConfidence() != null
@@ -208,179 +209,4 @@ public class PriorityServiceImpl implements PriorityService {
 
         return savedAssessment;
     }
-
-    // AI 분석 결과를 기반으로 상태 점수와 환경 점수를 계산
-    private ScoreResult calculateRiskScore(AIDetectionResultDto.DetectionObject humanDetection,
-                                            List<AIDetectionResultDto.DetectionObject> allDetections,
-                                            AIDetectionResultDto.DetectionSummary summary) {
-
-        // (A) 피해자 상태 점수 계산
-        double statusScore = calculateStatusScore(humanDetection);
-
-        // (B) 환경 위험 승수 계산
-        double environmentMultiplier = calculateEnvironmentMultiplier(humanDetection, allDetections, summary);
-
-        return new ScoreResult(statusScore, environmentMultiplier);
-    }
-
-    // (A) 피해자 상태 점수 계산 (Pose Estimation 기반)
-    // AI 모델 클래스: ["Crawling", "Falling", "Sitting", "Standing"]
-    private double calculateStatusScore(AIDetectionResultDto.DetectionObject humanDetection) {
-        String pose = humanDetection.getPose();
-
-        if (pose == null) {
-            return 3.0; // Pose 정보 없으면 기본값 (서 있음)
-        }
-
-        return switch (pose.toLowerCase()) {
-            case "falling", "fall", "fallen", "lying" -> 10.0;   // 쓰러져 있음 (Falling)
-            case "crawling" -> 8.0;                      // 기어가고 있음 (Crawling)
-            case "sitting" -> 5.0;                       // 앉아 있음 (Sitting)
-            case "standing" -> 3.0;                      // 서 있음 (Standing)
-            default -> 3.0;
-        };
-    }
-
-    // (B) 환경 위험 승수 계산 (Spatial Analysis 기반)
-    private double calculateEnvironmentMultiplier(AIDetectionResultDto.DetectionObject humanDetection,
-                                                   List<AIDetectionResultDto.DetectionObject> allDetections,
-                                                   AIDetectionResultDto.DetectionSummary summary) {
-        // 1. 피해자/침대에 직접 화재 (x 3.0) - fire와 human 박스가 겹침
-        if (checkFireOverlapHuman(humanDetection, allDetections)) {
-            return 3.0;
-        }
-
-        // 2. 짙은 연기 감지 (x 2.0) - smoke 박스의 면적이 전체 화면의 50% 이상
-        if (checkDenseSmoke(allDetections)) {
-            return 2.0;
-        }
-
-        // 3. 방 전체로 화재 확산 (x 1.5) - fire 박스의 면적이 전체 화면의 30% 이상
-        if (checkLargeFireArea(allDetections)) {
-            return 1.5;
-        }
-
-        // 4, 5, 6 판단을 위한 변수
-        boolean fireDetected = summary.getFireCount() != null && summary.getFireCount() > 0;
-        boolean smallFire = checkSmallFire(allDetections);
-
-        // 4. 단순 화재 감지 - 국소적 (x 1.0) - fire 박스가 감지되었으나, 위 조건에 해당하지 않음 (5% 이상 30% 미만)
-        if (fireDetected && !smallFire) {
-            return 1.0;
-        }
-
-        // 5. 화재가 물체에 국한 (x 0.5) - fire 박스의 면적이 전체 화면의 5% 미만
-        if (fireDetected && smallFire) {
-            return 0.5;
-        }
-
-        // 6. 화재 미감지 (x 0.1) - fire 박스가 감지되지 않음
-        return 0.1;
-    }
-
-    // 생존자 바운딩 박스와 화재 바운딩 박스의 겹침 여부 확인
-    private boolean checkFireOverlapHuman(AIDetectionResultDto.DetectionObject humanDetection,
-                                           List<AIDetectionResultDto.DetectionObject> allDetections) {
-        AIDetectionResultDto.BoundingBox humanBox = humanDetection.getBox();
-        if (humanBox == null) return false;
-
-        for (AIDetectionResultDto.DetectionObject detection : allDetections) {
-            if ("fire".equalsIgnoreCase(detection.getClassName())) {
-                AIDetectionResultDto.BoundingBox fireBox = detection.getBox();
-                if (fireBox == null) continue;
-
-                double overlapRatio = calculateOverlapRatio(humanBox, fireBox);
-                if (overlapRatio > 0.089) { // WeightScore.png 기준
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    // 두 바운딩 박스의 겹침 비율 계산 (IoU)
-    private double calculateOverlapRatio(AIDetectionResultDto.BoundingBox box1,
-                                          AIDetectionResultDto.BoundingBox box2) {
-        int x1 = Math.max(box1.getX1(), box2.getX1());
-        int y1 = Math.max(box1.getY1(), box2.getY1());
-        int x2 = Math.min(box1.getX2(), box2.getX2());
-        int y2 = Math.min(box1.getY2(), box2.getY2());
-
-        if (x2 <= x1 || y2 <= y1) {
-            return 0.0;
-        }
-
-        int intersectionArea = (x2 - x1) * (y2 - y1);
-        int box1Area = (box1.getX2() - box1.getX1()) * (box1.getY2() - box1.getY1());
-        int box2Area = (box2.getX2() - box2.getX1()) * (box2.getY2() - box2.getY1());
-        int unionArea = box1Area + box2Area - intersectionArea;
-
-        return unionArea > 0 ? (double) intersectionArea / unionArea : 0.0;
-    }
-
-    // 짙은 연기 감지 (smoke 박스 면적 합이 화면의 50% 이상)
-    private boolean checkDenseSmoke(List<AIDetectionResultDto.DetectionObject> allDetections) {
-        final int TOTAL_AREA = 1920 * 1080;
-        final double THRESHOLD = 0.5;
-
-        int smokeTotalArea = 0;
-        for (AIDetectionResultDto.DetectionObject detection : allDetections) {
-            if ("smoke".equalsIgnoreCase(detection.getClassName())) {
-                AIDetectionResultDto.BoundingBox box = detection.getBox();
-                if (box != null) {
-                    int area = (box.getX2() - box.getX1()) * (box.getY2() - box.getY1());
-                    smokeTotalArea += area;
-                }
-            }
-        }
-
-        return (double) smokeTotalArea / TOTAL_AREA >= THRESHOLD;
-    }
-
-    // 방 전체로 화재 확산 (fire 박스 면적 합이 화면의 30% 이상)
-    private boolean checkLargeFireArea(List<AIDetectionResultDto.DetectionObject> allDetections) {
-        final int TOTAL_AREA = 1920 * 1080;
-        final double THRESHOLD = 0.3;
-
-        int fireTotalArea = 0;
-        for (AIDetectionResultDto.DetectionObject detection : allDetections) {
-            if ("fire".equalsIgnoreCase(detection.getClassName())) {
-                AIDetectionResultDto.BoundingBox box = detection.getBox();
-                if (box != null) {
-                    int area = (box.getX2() - box.getX1()) * (box.getY2() - box.getY1());
-                    fireTotalArea += area;
-                }
-            }
-        }
-
-        return (double) fireTotalArea / TOTAL_AREA >= THRESHOLD;
-    }
-
-    // 화재가 물체에 국한 (fire 박스 면적이 화면의 5% 미만)
-    private boolean checkSmallFire(List<AIDetectionResultDto.DetectionObject> allDetections) {
-        final int TOTAL_AREA = 1920 * 1080;
-        final double THRESHOLD = 0.05;
-
-        int fireTotalArea = 0;
-        for (AIDetectionResultDto.DetectionObject detection : allDetections) {
-            if ("fire".equalsIgnoreCase(detection.getClassName())) {
-                AIDetectionResultDto.BoundingBox box = detection.getBox();
-                if (box != null) {
-                    int area = (box.getX2() - box.getX1()) * (box.getY2() - box.getY1());
-                    fireTotalArea += area;
-                }
-            }
-        }
-
-        return fireTotalArea > 0 && (double) fireTotalArea / TOTAL_AREA < THRESHOLD;
-    }
-
-    // 반환값 간소화를 위해 static 클래스 생성함
-    @Getter
-    @RequiredArgsConstructor
-    public static class ScoreResult {
-        private final double statusScore;
-        private final double environmentMultiplier;
-    }
-
 }

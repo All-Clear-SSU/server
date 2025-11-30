@@ -1,7 +1,11 @@
 package opensource.project.service;
 
 import opensource.project.domain.*;
-import opensource.project.domain.enums.*;
+import opensource.project.domain.enums.CCTVStatus;
+import opensource.project.domain.enums.CurrentStatus;
+import opensource.project.domain.enums.DetectionMethod;
+import opensource.project.domain.enums.DetectionType;
+import opensource.project.domain.enums.RescueStatus;
 import opensource.project.dto.AIDetectionResultDto;
 import opensource.project.repository.*;
 import org.junit.jupiter.api.BeforeEach;

@@ -31,3 +31,22 @@ springdoc:
 app:
   server:
     base-url: ${SERVER_BASE_URL:http://localhost:8080}
+
+# AI Object Detection API 설정
+ai:
+  object-detection:
+    base-url: ${AI_API_BASE_URL:http://localhost:8000}
+    predict-endpoint: /predict
+    predict-image-endpoint: /predict_image
+    confidence-threshold: 0.5
+
+# 환경 분석 설정
+spatial-analysis:
+  screen:
+    width: 1920
+    height: 1080
+  thresholds:
+    dense-smoke: 0.5          # 짙은 연기 감지 임계값 (화면 대비 면적 비율)
+    large-fire: 0.3           # 대형 화재 감지 임계값 (화면 대비 면적 비율)
+    small-fire: 0.05          # 소형 화재 감지 임계값 (화면 대비 면적 비율)
+    fire-overlap-human: 0.089 # 화재와 인간 바운딩 박스 겹침 임계값 (IoU)

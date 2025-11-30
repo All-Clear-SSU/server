@@ -1,7 +1,12 @@
 package opensource.project.service;
 
 import opensource.project.domain.enums.SensorStatus;
-import opensource.project.dto.*;
+import opensource.project.dto.LocationRequestDto;
+import opensource.project.dto.LocationResponseDto;
+import opensource.project.dto.MemberRequestDto;
+import opensource.project.dto.MemberResponseDto;
+import opensource.project.dto.WifiSensorRequestDto;
+import opensource.project.dto.WifiSensorResponseDto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

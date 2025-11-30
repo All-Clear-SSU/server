@@ -1,0 +1,45 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+
+  h2:
+    console:
+      enabled: true
+
+mqtt:
+  enabled: false
+
+app:
+  server:
+    base-url: http://localhost:8080
+
+# AI Object Detection API 설정 (테스트용)
+ai:
+  object-detection:
+    base-url: http://localhost:8000
+    predict-endpoint: /predict
+    predict-image-endpoint: /predict_image
+    confidence-threshold: 0.5
+
+# 환경 분석 설정 (테스트용)
+spatial-analysis:
+  screen:
+    width: 1920
+    height: 1080
+  thresholds:
+    dense-smoke: 0.5
+    large-fire: 0.3
+    small-fire: 0.05
+    fire-overlap-human: 0.089
