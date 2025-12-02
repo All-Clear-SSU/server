@@ -18,6 +18,10 @@ public class CCTVRequestDto {
     @NotBlank(message = "CCTV 코드는 필수입니다")
     private String cctvCode;
 
+    private String cctvName;
+
+    private String rtspUrl;
+
     @NotNull(message = "상태는 필수입니다")
     private CCTVStatus status;
 

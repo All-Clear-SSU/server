@@ -37,7 +37,8 @@ public class WebConfig implements WebMvcConfigurer {
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         registry.addResourceHandler("/streams/**")
                 .addResourceLocations("file:/home/ubuntu/streams/")
-                .setCachePeriod(0); // HLS 세그먼트는 캐싱하지 않음 (실시간 업데이트)
+                .setCachePeriod(0) // HLS 세그먼트는 캐싱하지 않음 (실시간 업데이트)
+                .resourceChain(true);
     }
 
     @Bean

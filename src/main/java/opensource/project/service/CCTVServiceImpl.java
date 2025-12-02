@@ -5,6 +5,7 @@ import opensource.project.domain.CCTV;
 import opensource.project.domain.Location;
 import opensource.project.dto.CCTVRequestDto;
 import opensource.project.dto.CCTVResponseDto;
+import opensource.project.dto.UpdateRtspUrlRequestDto;
 import opensource.project.repository.CCTVRepository;
 import opensource.project.repository.LocationRepository;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,8 @@ public class CCTVServiceImpl implements CCTVService {
         CCTV cctv = CCTV.builder()
                 .cameraNumber(requestDto.getCameraNumber())
                 .cctvCode(requestDto.getCctvCode())
+                .cctvName(requestDto.getCctvName())
+                .rtspUrl(requestDto.getRtspUrl())
                 .status(requestDto.getStatus())
                 .location(location)
                 .isActive(requestDto.getIsActive())
@@ -78,6 +81,8 @@ public class CCTVServiceImpl implements CCTVService {
 
         cctv.setCameraNumber(requestDto.getCameraNumber());
         cctv.setCctvCode(requestDto.getCctvCode());
+        cctv.setCctvName(requestDto.getCctvName());
+        cctv.setRtspUrl(requestDto.getRtspUrl());
         cctv.setStatus(requestDto.getStatus());
         cctv.setLocation(location);
 
@@ -97,6 +102,20 @@ public class CCTVServiceImpl implements CCTVService {
             throw new IllegalArgumentException("CCTV not found with id: " + id);
         }
         cctvRepository.deleteById(id);
+    }
+
+    @Override
+    @Transactional
+    public CCTVResponseDto updateRtspUrl(Long id, UpdateRtspUrlRequestDto requestDto) {
+        // CCTV 존재 여부 확인
+        CCTV cctv = cctvRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("CCTV not found with id: " + id));
+
+        // RTSP URL 업데이트
+        cctv.setRtspUrl(requestDto.getRtspUrl());
+
+        // 저장 및 반환
+        return CCTVResponseDto.from(cctv);
     }
 
 }

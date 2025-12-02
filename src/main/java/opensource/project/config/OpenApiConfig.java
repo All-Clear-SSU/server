@@ -95,4 +95,12 @@ public class OpenApiConfig {
                 .pathsToMatch("/websocket/test/**")
                 .build();
     }
+
+    @Bean
+    public GroupedOpenApi liveStreamApi(){
+        return GroupedOpenApi.builder()
+                .group("9. Live-Stream API")
+                .pathsToMatch("/live-stream/**")
+                .build();
+    }
 }

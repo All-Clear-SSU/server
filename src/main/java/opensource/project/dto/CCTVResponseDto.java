@@ -16,6 +16,8 @@ public class CCTVResponseDto {
     private Long id;
     private Integer cameraNumber;
     private String cctvCode;
+    private String cctvName;
+    private String rtspUrl;
     private CCTVStatus status;
     private Long locationId;
     private LocationResponseDto location;
@@ -29,6 +31,8 @@ public class CCTVResponseDto {
                 .id(cctv.getId())
                 .cameraNumber(cctv.getCameraNumber())
                 .cctvCode(cctv.getCctvCode())
+                .cctvName(cctv.getCctvName())
+                .rtspUrl(cctv.getRtspUrl())
                 .status(cctv.getStatus())
                 .locationId(cctv.getLocation().getId())
                 .location(LocationResponseDto.from(cctv.getLocation()))
@@ -44,6 +48,8 @@ public class CCTVResponseDto {
                 .id(cctv.getId())
                 .cameraNumber(cctv.getCameraNumber())
                 .cctvCode(cctv.getCctvCode())
+                .cctvName(cctv.getCctvName())
+                .rtspUrl(cctv.getRtspUrl())
                 .status(cctv.getStatus())
                 .locationId(cctv.getLocation().getId())
                 .isActive(cctv.getIsActive())

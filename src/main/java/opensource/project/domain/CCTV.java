@@ -28,6 +28,12 @@ public class CCTV {
     @Column(unique = true, nullable = false, length = 50)
     private String cctvCode;
 
+    @Column(length = 100)
+    private String cctvName;
+
+    @Column(length = 255)
+    private String rtspUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private CCTVStatus status;

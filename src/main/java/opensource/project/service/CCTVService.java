@@ -2,6 +2,7 @@ package opensource.project.service;
 
 import opensource.project.dto.CCTVRequestDto;
 import opensource.project.dto.CCTVResponseDto;
+import opensource.project.dto.UpdateRtspUrlRequestDto;
 
 import java.util.List;
 
@@ -24,4 +25,7 @@ public interface CCTVService {
 
     // CCTV 삭제
     void deleteCCTV(Long id);
+
+    // CCTV의 RTSP URL만 업데이트함
+    CCTVResponseDto updateRtspUrl(Long id, UpdateRtspUrlRequestDto requestDto);
 }
