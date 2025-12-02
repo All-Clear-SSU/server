@@ -110,7 +110,7 @@ class BasicServiceTest {
         assertThat(createdSensor.getIsActive()).isTrue();
 
         // when - 전체 센서 조회
-        List<WifiSensorResponseDto> allSensors = wifiSensorService.getAllWifiSensors();
+        List<WifiSensorResponseDto> allSensors = wifiSensorService.getAllWifiSensors(true);
 
         // then - 조회 확인
         assertThat(allSensors).isNotEmpty();
@@ -149,6 +149,6 @@ class BasicServiceTest {
         // 4. 모든 데이터 조회 검증
         assertThat(memberService.getAllMembers()).isNotEmpty();
         assertThat(locationService.getAllLocations()).isNotEmpty();
-        assertThat(wifiSensorService.getAllWifiSensors()).isNotEmpty();
+        assertThat(wifiSensorService.getAllWifiSensors(true)).isNotEmpty();
     }
 }
