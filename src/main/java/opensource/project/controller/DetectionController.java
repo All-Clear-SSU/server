@@ -136,7 +136,7 @@ public class DetectionController {
                 .body(imageBytes);
     }
 
-    // FastAPI의 /analyze_video 혹은 /start_live_stream 엔드포인트(API)에서 프레임별 분석 결과를 전송받아 처리
+    // FastAPI의 /analyze_video 엔드포인트(API)에서 프레임별 분석 결과를 전송받아 처리
     @Operation(summary = "AI 분석 결과 수신", description = "FastAPI로부터 영상 분석 결과를 받아 Survivor, Detection, PriorityAssessment를 생성합니다.")
     @PostMapping("/ai-analysis")
     public ResponseEntity<String> receiveAIAnalysis(@Valid @RequestBody AIAnalysisRequestDto request) {
