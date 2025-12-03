@@ -9,12 +9,10 @@
 4. [Live-streaming 관련 API 사용법](#4-live-streaming-관련-api-사용법)
 5. [Swagger 문서 주소와 사용법](#5-swagger-문서-주소와-사용법)
 6. [실시간 스트리밍 진행시 생존자 탐지 및 탐지정보, 위험도 점수 업데이트되는 과정](#6-실시간-스트리밍-진행시-생존자-탐지-및-위험도-점수-업데이트-과정)
-7. (추가 예정) [WiFi 신호 탐지 관련 API 사용법]
+7. [WiFi CSI 센서 기반 생존자 탐지 과정 및 관련 API](#7-wifi-csi-센서-기반-생존자-탐지-시스템)
 ---
 
-## 1. 서버 실행 방법
-
-### 사전 준비
+## 1. 서버 실행 과정
 
 #### 환경 변수 목록
 다음 환경 변수가 설정 되어있음:
@@ -33,51 +31,17 @@ export MQTT_ENABLED=false  # (선택사항, 기본값: false, mqtt 테스트시 
 - Oracle Database
 - FastAPI AI 서버 (생존자 탐지 및 HLS 스트리밍 변환용)
 
-### 빌드 및 실행
-
-#### 개발 환경
-```bash
-# 프로젝트 빌드
-./gradlew build
-
-# 애플리케이션 실행
-./gradlew bootRun
-
-# 클린 빌드
-./gradlew clean build
-```
-
-#### 프로덕션 배포
-```bash
-# JAR 파일 생성
-./gradlew bootJar
-
-# JAR 파일 실행
-java -jar build/libs/project-0.0.1-SNAPSHOT.jar
-```
 
 #### 자동 배포 (GitHub Actions)
 `main` 브랜치에 푸시하면 자동으로 EC2 인스턴스에 배포됩니다.
 - `.github/workflows/deploy.yml` 워크플로우가 실행됩니다
 - 필요한 GitHub Secrets: `EC2_SSH_KEY`, `EC2_HOST`, `EC2_USER`
+- Spring Boot, FastAPI 서버가 실행됨
 
-### 테스트
-
-```bash
-# 전체 테스트 실행
-./gradlew test
-
-# 상세 출력과 함께 테스트
-./gradlew test --info
-
-# 특정 테스트 클래스만 실행
-./gradlew test --tests "opensource.project.ProjectApplicationTests"
-```
-
-### 서버 확인
+### 서버 실행중 확인
 서버가 정상적으로 실행되면 다음 주소로 접근할 수 있습니다:
-- 애플리케이션: http://localhost:8080
-- Swagger UI: http://localhost:8080/swagger-ui.html
+- Swagger UI(Spring Boot): http://(server_url):8080/swagger-ui.html
+- Swagger UI(FastAPI): http://(server_url):8000/dcos
 
 ---
 
@@ -102,7 +66,8 @@ project/
 │   │   │   │   ├── PriorityAssessmentController.java
 │   │   │   │   ├── SurvivorController.java
 │   │   │   │   ├── WebSocketTestController.java
-│   │   │   │   └── WifiSensorController.java
+│   │   │   │   ├── WifiDetectionController.java   # WiFi 탐지 테스트용
+│   │   │   │   └── WifiSensorController.java      # WiFi 센서 CRUD
 │   │   │   ├── domain/              # JPA 엔티티
 │   │   │   │   ├── enums/           # Enum 클래스
 │   │   │   │   ├── CCTV.java
@@ -126,13 +91,36 @@ project/
 │   │   │   │   ├── SurvivorRepository.java
 │   │   │   │   └── ... (기타 Repository)
 │   │   │   └── service/             # 비즈니스 로직 서비스
-│   │   │       ├── AIDetectionProcessorService.java  # AI 탐지 결과 처리
+│   │   │       ├── # CCTV 및 AI 탐지 관련
+│   │   │       ├── AIDetectionProcessorService.java      # CCTV AI 탐지 결과 처리 및 생존자 매칭
+│   │   │       ├── ObjectDetectionApiClient.java         # 외부 AI API 통신 인터페이스
+│   │   │       ├── ObjectDetectionApiClientImpl.java     # FastAPI AI 서버 HTTP 통신
+│   │   │       ├── LiveStreamService.java                # 라이브 스트리밍 제어 인터페이스
+│   │   │       ├── LiveStreamServiceImpl.java            # RTSP → HLS 변환 및 AI 분석
 │   │   │       ├── CCTVService.java / CCTVServiceImpl.java
-│   │   │       ├── LiveStreamService.java / LiveStreamServiceImpl.java
-│   │   │       ├── PriorityService.java / PriorityServiceImpl.java
-│   │   │       ├── SurvivorMatchingService.java      # 생존자 매칭 로직
-│   │   │       ├── WebSocketService.java             # 실시간 알림
-│   │   │       └── ... (기타 Service)
+│   │   │       │
+│   │   │       ├── # WiFi 센서 탐지 관련
+│   │   │       ├── WifiDetectionMqttService.java         # MQTT 메시지 수신 및 처리
+│   │   │       ├── WifiDetectionProcessorService.java    # WiFi 생존자 매칭 및 DB 저장
+│   │   │       ├── WifiSensorService.java / WifiSensorServiceImpl.java
+│   │   │       ├── WifiDetectionService.java             # WiFi 탐지 데이터 조회 서비스
+│   │   │       │
+│   │   │       ├── # 생존자 및 위험도 평가 관련
+│   │   │       ├── SurvivorService.java / SurvivorServiceImpl.java    # 생존자 CRUD
+│   │   │       ├── SurvivorMatchingService.java          # 바운딩박스 기반 생존자 매칭
+│   │   │       ├── PriorityService.java / PriorityServiceImpl.java    # 위험도 평가 종합
+│   │   │       ├── RiskScoreCalculator.java              # 위험도 점수 계산 알고리즘
+│   │   │       ├── EnvironmentalAnalysisService.java     # 환경 위험 요소 분석
+│   │   │       ├── BoundingBoxAnalyzer.java              # 바운딩박스 IoU 계산
+│   │   │       │
+│   │   │       ├── # 기타 도메인 서비스
+│   │   │       ├── DetectionService.java / DetectionServiceImpl.java  # 탐지 기록 관리
+│   │   │       ├── LocationService.java / LocationServiceImpl.java    # 위치 정보 관리
+│   │   │       ├── MemberService.java / MemberServiceImpl.java        # 회원 관리
+│   │   │       │
+│   │   │       └── # 실시간 통신
+│   │   │           ├── WebSocketService.java             # WebSocket 브로드캐스트 인터페이스
+│   │   │           └── WebSocketServiceImpl.java         # 실시간 알림 전송
 │   │   └── resources/
 │   │       ├── application.yml      # 애플리케이션 설정
 │   │       └── application.properties
@@ -854,6 +842,591 @@ stompClient.activate();
 - `SurvivorMatchingService.java`
 - `PriorityServiceImpl.java`
 - `WebSocketService.java` 및 `WebSocketServiceImpl.java`
+
+---
+
+## 7. WiFi CSI 센서 기반 생존자 탐지 시스템
+
+### 개요
+
+WiFi CSI(Channel State Information)를 이용해 
+생존자 탐지(ESP32 WiFi 모듈이 벽이나 장애물 너머의 움직임 감지) 및 실시간으로 서버에 전송
+
+### 시스템 아키텍처
+
+```
+[ESP32 WiFi 센서]
+    ↓ WiFi CSI 신호 수집 (5초 간격)
+    ↓ AI 모델 분석 (움직임 등 감지)
+[MQTT 브로커]
+    ↓ MQTT 메시지 발행
+[Spring Boot 백엔드]
+    ├─ WifiDetectionMqttService: MQTT 메시지 수신 및 처리
+    ├─ WifiDetectionProcessorService: 생존자 매칭 및 DB 저장
+    └─ WebSocketService: 실시간 브로드캐스트
+        ↓
+[프론트엔드 클라이언트]
+    ├─ 실시간 CSI 신호 그래프
+    ├─ 생존자 탐지 알림
+    └─ 생존자 정보 업데이트
+```
+
+### WebSocket 구독 방법
+
+#### 구독 토픽
+
+WiFi 센서의 실시간 신호 데이터를 받으려면 다음 토픽을 구독하세요:
+
+```
+/topic/wifi-sensor/{sensorId}/signal
+```
+
+- `{sensorId}`: WiFi 센서 ID (예: `ESP32-001`, `ESP32-AABBCCDDEE`)
+- 발행 주기: **5초마다** (생존자 탐지 여부와 무관하게 항상 발행됨)
+- 데이터 형식: `WifiSignalDto` (JSON)
+
+#### 프론트엔드 연결 예시
+
+##### STOMP.js를 사용한 연결
+
+```javascript
+import { Client } from '@stomp/stompjs';
+
+// WebSocket 클라이언트 생성
+const stompClient = new Client({
+    brokerURL: 'ws://localhost:8080/ws',
+    reconnectDelay: 5000,
+    heartbeatIncoming: 4000,
+    heartbeatOutgoing: 4000,
+
+    onConnect: (frame) => {
+        console.log('WebSocket 연결 성공:', frame);
+
+        // WiFi 센서 신호 구독 (센서 ID: ESP32-001)
+        stompClient.subscribe('/topic/wifi-sensor/ESP32-001/signal', (message) => {
+            const signalData = JSON.parse(message.body);
+            console.log('WiFi 신호 수신:', signalData);
+
+            // 그래프 업데이트
+            updateSignalGraph(signalData);
+
+            // 생존자가 탐지된 경우 알림 표시
+            if (signalData.survivor_detected) {
+                showSurvivorAlert(signalData);
+                highlightSurvivor(signalData.survivor_id);
+            }
+        });
+    },
+
+    onStompError: (frame) => {
+        console.error('STOMP 오류:', frame.headers['message']);
+    }
+});
+
+// WebSocket 연결 시작
+stompClient.activate();
+
+// 그래프 업데이트 함수
+function updateSignalGraph(signalData) {
+    // 신호 강도를 실시간 그래프에 추가
+    const chartData = {
+        timestamp: signalData.timestamp,
+        signalStrength: signalData.signal_strength,
+        csiAmplitude: signalData.csi_amplitude_summary,
+        movementIntensity: signalData.movement_intensity,
+        breathingRate: signalData.breathing_rate
+    };
+
+    // Chart.js, D3.js 등을 사용하여 그래프 업데이트
+    addChartDataPoint(chartData);
+}
+
+// 생존자 탐지 알림 함수
+function showSurvivorAlert(signalData) {
+    alert(`⚠️ 생존자 탐지됨!\n` +
+          `센서: ${signalData.sensor_name}\n` +
+          `위치: ${signalData.location_address}\n` +
+          `생존자 번호: ${signalData.survivor_number}\n` +
+          `신뢰도: ${(signalData.confidence * 100).toFixed(1)}%\n` +
+          `신호 강도: ${signalData.signal_strength} dBm`);
+}
+```
+
+##### SockJS를 사용한 연결 (브라우저 호환성 향상)
+
+```javascript
+import SockJS from 'sockjs-client';
+import { Stomp } from '@stomp/stompjs';
+
+const socket = new SockJS('http://localhost:8080/ws');
+const stompClient = Stomp.over(socket);
+
+stompClient.connect({}, (frame) => {
+    console.log('WebSocket 연결:', frame);
+
+    // WiFi 센서 구독
+    stompClient.subscribe('/topic/wifi-sensor/ESP32-001/signal', (message) => {
+        const data = JSON.parse(message.body);
+        handleWifiSignal(data);
+    });
+});
+```
+
+### WiFi 신호 데이터 형식 (WifiSignalDto)
+
+WebSocket으로 수신되는 데이터 구조:
+
+```json
+{
+  "sensor_id": "ESP32-001",
+  "sensor_name": "1층 로비 센서",
+  "location_id": 10,
+  "location_address": "정보관 2층 01",
+  "survivor_detected": true,
+  "survivor_id": 42,
+  "survivor_number": "S-042",
+  "signal_strength": -45,
+  "confidence": 0.87,
+  "timestamp": "2025-12-03T14:30:25",
+  "csi_amplitude_summary": [12.5, 15.3, 18.7, 14.2, 16.8],
+  "movement_detected": true,
+  "movement_intensity": 0.65,
+  "breathing_detected": true,
+  "breathing_rate": 18.5,
+  "sensor_status": "ACTIVE",
+  "battery_level": 85,
+  "detailed_csi_analysis": {
+    "csi_amplitude": [[12.5, 12.7, 12.9], [15.3, 15.5, 15.7]],
+    "csi_phase": [[1.2, 1.3, 1.4], [2.1, 2.2, 2.3]],
+    "movement_detected": true,
+    "movement_intensity": 0.65,
+    "breathing_detected": true,
+    "breathing_rate": 18.5,
+    "timestamp": "2025-12-03T14:30:25"
+  }
+}
+```
+
+#### 주요 필드 설명
+
+**센서 정보**
+- `sensor_id`: WiFi 센서 ID (ESP32 모듈 식별자)
+- `sensor_name`: 센서 이름 (사용자 친화적)
+- `location_id`: 위치 ID
+- `location_address`: 위치 주소
+- `sensor_status`: 센서 상태 (`ACTIVE`, `LOW_BATTERY`, `ERROR`)
+- `battery_level`: 배터리 잔량 (0~100%)
+
+**그래프 데이터**
+- `signal_strength`: 신호 강도 (RSSI, dBm 단위) - **그래프 Y축**
+- `timestamp`: 측정 시각 - **그래프 X축**
+- `csi_amplitude_summary`: CSI 진폭 요약 (각 부반송파의 최신 값)
+- `movement_intensity`: 움직임 강도 (0.0 ~ 1.0)
+- `breathing_rate`: 호흡률 (분당 호흡 횟수, BPM)
+
+**생존자 탐지 정보**
+- `survivor_detected`: 생존자 탐지 여부 (`true` / `false`)
+- `survivor_id`: 생존자 ID (탐지된 경우에만)
+- `survivor_number`: 생존자 번호 (예: `S-001`, `S-042`)
+- `confidence`: AI 모델 신뢰도 (0.0 ~ 1.0)
+
+**움직임 및 호흡 감지**
+- `movement_detected`: 움직임 감지 여부
+- `movement_intensity`: 움직임 강도 (0.0 ~ 1.0)
+- `breathing_detected`: 호흡 감지 여부
+- `breathing_rate`: 호흡률 (분당 호흡 횟수)
+
+**상세 분석 데이터** (생존자 탐지 시에만 포함)
+- `detailed_csi_analysis`: 전체 CSI 분석 데이터 (상세 그래프용)
+  - `csi_amplitude`: 각 부반송파별 CSI 진폭 시계열 데이터
+  - `csi_phase`: 각 부반송파별 CSI 위상 시계열 데이터
+
+### WiFi 신호 전달 프로세스
+
+#### Phase 1: ESP32 센서 데이터 수집 및 발행
+
+**1. WiFi CSI 신호 수집** (ESP32 모듈)
+- ESP32 모듈이 5초마다 WiFi CSI 신호를 수집함
+- AI 모델이 CSI 데이터를 분석하여 움직임 등 감지함
+- 생존자 존재 여부를 판단함 (`survivor_detected`: true/false)
+
+**2. MQTT 메시지 발행**
+```json
+MQTT Topic: /wifi-sensors/{locationId}/detection
+Payload:
+{
+  "sensor_id": "ESP32-001",
+  "location_id": 10,
+  "survivor_detected": true,
+  "signal_strength": -45,
+  "confidence": 0.87,
+  "timestamp": "2025-12-03T14:30:25",
+  "csi_analysis": {
+    "csi_amplitude": [[...]],
+    "movement_detected": true,
+    "breathing_detected": true,
+    "breathing_rate": 18.5
+  },
+  "battery_level": 85,
+  "status_message": "ACTIVE"
+}
+```
+
+#### Phase 2: Spring Boot 백엔드 처리
+
+**1. MQTT 메시지 수신** (`WifiDetectionMqttService.java`)
+
+```java
+@Transactional
+public void processMqttMessage(MqttWifiDetectionDto mqttData) {
+    // 1. 데이터 유효성 검증
+    validateMqttData(mqttData);
+
+    // 2. WiFi 센서 정보 조회
+    WifiSensor sensor = wifiSensorRepository.findBySensorCode(mqttData.getSensorId())
+        .orElseThrow(...);
+
+    // 3. 위치 정보 조회
+    Location location = locationRepository.findById(mqttData.getLocationId())
+        .orElseThrow(...);
+
+    // 4. 센서 상태 업데이트 (마지막 활성 시각, 신호 강도)
+    sensor.setLastActiveAt(mqttData.getTimestamp());
+    sensor.setSignalStrength(mqttData.getSignalStrength());
+    wifiSensorRepository.save(sensor);
+
+    // 5. WebSocket 브로드캐스트용 DTO 생성
+    WifiSignalDto signalDto = WifiSignalDto.fromMqttData(
+        mqttData, sensor.getSensorCode(), location.getFullAddress()
+    );
+
+    // 6. [항상 수행] WebSocket으로 실시간 신호 브로드캐스트
+    webSocketService.broadcastWifiSignal(mqttData.getSensorId(), signalDto);
+
+    // 7. [생존자 탐지 시에만] DB 저장 및 생존자 매칭
+    if (Boolean.TRUE.equals(mqttData.getSurvivorDetected())) {
+        wifiDetectionProcessorService.processDetection(mqttData, sensor, location, signalDto);
+    }
+}
+```
+
+**핵심 특징**:
+- **항상 WebSocket 브로드캐스트**: 생존자 탐지 여부와 무관하게 5초마다 실시간 그래프 데이터를 전송함
+- **조건부 DB 저장**: 생존자가 탐지된 경우에만 DB에 저장하여 스토리지 효율성을 높임
+
+**2. WebSocket 브로드캐스트** (`WebSocketServiceImpl.java`)
+
+```java
+@Override
+public void broadcastWifiSignal(String sensorId, WifiSignalDto signalData) {
+    String destination = "/topic/wifi-sensor/" + sensorId + "/signal";
+    messagingTemplate.convertAndSend(destination, signalData);
+
+    if (Boolean.TRUE.equals(signalData.getSurvivorDetected())) {
+        log.info("⚠️ [생존자 탐지!] WiFi 신호 브로드캐스트 - 센서: {}, 생존자 ID: {}, 신뢰도: {}",
+                 sensorId, signalData.getSurvivorId(), signalData.getConfidence());
+    }
+}
+```
+
+#### Phase 3: 생존자 탐지 시 추가 처리
+
+**생존자 매칭 또는 생성** (`WifiDetectionProcessorService.java`)
+
+```java
+@Transactional
+public void processDetection(MqttWifiDetectionDto mqttData,
+                              WifiSensor sensor,
+                              Location location,
+                              WifiSignalDto signalDto) {
+    // 1. 같은 위치의 최근 생존자를 찾거나 새로 생성함
+    Survivor survivor = findOrCreateSurvivor(location, mqttData.getTimestamp());
+    boolean isNewSurvivor = survivor.getId() == null;
+
+    // 2. 생존자 정보 업데이트
+    updateSurvivorInfo(survivor, location, mqttData.getTimestamp());
+
+    // 3. 생존자 저장
+    survivor = survivorRepository.save(survivor);
+
+    // 4. WifiSignalDto에 생존자 정보 설정
+    signalDto.setSurvivorInfo(survivor.getId(), formatSurvivorNumber(survivor.getSurvivorNumber()));
+
+    // 5. WebSocket으로 생존자 업데이트 브로드캐스트
+    if (isNewSurvivor) {
+        webSocketService.broadcastNewSurvivorAdded(SurvivorResponseDto.from(survivor));
+    } else {
+        webSocketService.broadcastSurvivorUpdate(survivor.getId(), SurvivorResponseDto.from(survivor));
+    }
+
+    // 6. Detection 레코드 생성 및 저장
+    Detection detection = createDetection(mqttData, survivor, sensor, location, mqttData.getTimestamp());
+    Detection savedDetection = detectionRepository.save(detection);
+
+    // 7. WebSocket으로 탐지 정보 브로드캐스트
+    webSocketService.broadcastDetectionUpdate(survivor.getId(), DetectionResponseDto.from(savedDetection));
+}
+```
+
+**생존자 매칭 알고리즘**:
+- 같은 위치(`Location`)에서 최근 **10분 이내**에 WiFi로 탐지된 생존자를 조회함
+- 매칭되면 기존 생존자 재사용 (마지막 탐지 시각만 업데이트)
+- 매칭되지 않으면 새로운 생존자 생성
+- 시간 임계값 변경: `WifiDetectionProcessorService.java:55` (`TIME_THRESHOLD_MINUTES`)
+
+#### Phase 4: 프론트엔드 수신 및 렌더링
+
+**1. WebSocket 메시지 수신**
+- 프론트엔드는 `/topic/wifi-sensor/{sensorId}/signal` 토픽을 구독함
+- 5초마다 `WifiSignalDto` 데이터를 수신함
+
+**2. 그래프 업데이트**
+- `signal_strength`, `csi_amplitude_summary`, `movement_intensity`, `breathing_rate` 등을 그래프에 추가함
+- 시간축(`timestamp`)과 신호 강도 축(`signal_strength`)을 사용하여 실시간 그래프를 렌더링함
+
+**3. 생존자 탐지 시 특수 효과**
+- `survivor_detected: true`인 경우:
+  - 알림 팝업 표시
+  - 생존자 마커 추가
+  - 그래프에 하이라이트 표시
+  - `detailed_csi_analysis`를 사용하여 상세 그래프 렌더링
+
+### 전체 데이터 흐름 요약
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. ESP32 WiFi 센서                                                      │
+│    - 5초마다 WiFi CSI 신호 수집                                          │
+│    - AI 모델 분석 (움직임/호흡 감지)                                      │
+│    - 생존자 탐지 여부 판단                                                │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             ↓ MQTT 발행
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2. Spring Boot 백엔드 (WifiDetectionMqttService)                        │
+│    - MQTT 메시지 수신                                                    │
+│    - 센서 및 위치 정보 조회                                               │
+│    - 센서 상태 업데이트                                                   │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             ↓
+              ┌──────────────┴──────────────┐
+              ↓ (항상)                      ↓ (생존자 탐지 시에만)
+┌─────────────────────────────┐  ┌─────────────────────────────────────┐
+│ 3. WebSocket 브로드캐스트    │  │ 4. 생존자 매칭 및 DB 저장            │
+│    - /topic/wifi-sensor/    │  │    - 기존 생존자 찾기 또는 새로 생성  │
+│      {sensorId}/signal      │  │    - Survivor 저장                  │
+│    - 실시간 그래프 데이터     │  │    - Detection 레코드 생성          │
+│      (5초마다)               │  │    - 생존자 정보 WebSocket 브로드캐스트│
+└─────────────┬───────────────┘  └─────────────┬───────────────────────┘
+              ↓                                 ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 5. 프론트엔드 클라이언트                                                  │
+│    - 실시간 CSI 신호 그래프 렌더링                                         │
+│    - 생존자 탐지 알림 표시                                                │
+│    - 생존자 정보 업데이트                                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 주요 특징
+
+**1. 실시간 모니터링**
+- 5초마다 WiFi 신호 데이터를 프론트엔드에 전송함
+- 생존자 탐지 여부와 무관하게 항상 그래프 데이터를 제공함
+- WebSocket을 통한 양방향 통신으로 지연 시간 최소화
+
+**2. 효율적인 데이터 관리**
+- **평상시**: WebSocket 브로드캐스트만 수행 (DB 저장 안 함)
+- **생존자 탐지 시**: DB 저장 + WebSocket 브로드캐스트
+- 스토리지 사용량을 최소화하면서도 실시간 모니터링 가능
+
+**3. 생존자 매칭 시스템**
+- 같은 위치에서 최근 10분 이내 탐지된 생존자를 재사용함
+- 중복 생존자 생성을 방지하고 추적 정확도를 높임
+- 시간 임계값은 설정 변경 가능 (`WifiDetectionProcessorService.java:55`)
+
+### 그래프 표현 필드 조정 방법
+
+프론트엔드 그래프에 표시할 데이터를 변경하려면:
+
+**1. `WifiSignalDto.java` 수정**
+- 새로운 필드를 추가하거나 기존 필드를 수정함
+- 예: 새로운 센서 데이터 추가, 필드명 변경 등
+
+**2. `WifiSignalDto.fromMqttData()` 메서드 수정** (`WifiSignalDto.java:160-200`)
+- MQTT 데이터를 WebSocket DTO로 변환하는 로직
+- 새 필드를 추가했다면 이 메서드에서도 해당 필드를 설정해야 함
+
+**현재 그래프용 주요 필드**:
+- `signalStrength`: 신호 강도 (Y축)
+- `timestamp`: 시간 (X축)
+- `csiAmplitudeSummary`: CSI 진폭 요약
+- `movementIntensity`: 움직임 강도
+- `breathingRate`: 호흡률
+
+### 생존자 매칭 시간 임계값 조정
+
+**현재 설정**: 10분
+
+**수정 위치**: `WifiDetectionProcessorService.java:55`
+
+```java
+private static final int TIME_THRESHOLD_MINUTES = 10;
+```
+
+이 값을 원하는 시간(분 단위)으로 변경하면 됩니다.
+
+**예시**:
+- 5분으로 변경: `private static final int TIME_THRESHOLD_MINUTES = 5;`
+- 15분으로 변경: `private static final int TIME_THRESHOLD_MINUTES = 15;`
+
+### MQTT 연동 설정
+
+**환경 변수 설정**:
+```bash
+export MQTT_ENABLED=true  # MQTT 기능 활성화
+```
+
+**application.yml** (MQTT 브로커 설정):
+```yaml
+mqtt:
+  enabled: ${MQTT_ENABLED:false}
+```
+
+### REST API 엔드포인트
+
+프론트엔드에서 사용할 수 있는 WiFi 센서 관련 REST API입니다. 실시간 신호 데이터는 WebSocket을 사용하고, 센서 관리는 REST API를 사용합니다.
+
+#### GET /wifi-sensors - WiFi 센서 목록 조회
+
+모든 WiFi 센서 목록을 조회합니다. `active` 파라미터로 활성 센서만 필터링할 수 있습니다.
+
+**요청 예시**
+```bash
+# 전체 센서 조회
+GET /wifi-sensors
+
+# 활성 센서만 조회
+GET /wifi-sensors?active=true
+
+# 비활성 센서만 조회
+GET /wifi-sensors?active=false
+```
+
+**응답 예시**
+```json
+[
+  {
+    "id": 1,
+    "sensorCode": "ESP32-001",
+    "location": {
+      "id": 10,
+      "fullAddress": "정보관 2층 01"
+    },
+    "signalStrength": -45,
+    "isActive": true,
+    "lastActiveAt": "2025-12-03T14:30:25",
+    "createdAt": "2025-12-01T10:00:00"
+  },
+  {
+    "id": 2,
+    "sensorCode": "ESP32-002",
+    "location": {
+      "id": 11,
+      "fullAddress": "정보관 3층 02"
+    },
+    "signalStrength": -52,
+    "isActive": true,
+    "lastActiveAt": "2025-12-03T14:30:20",
+    "createdAt": "2025-12-01T11:00:00"
+  }
+]
+```
+
+#### POST /wifi-sensors - WiFi 센서 등록
+
+새로운 WiFi 센서를 시스템에 등록합니다.
+
+**요청 예시**
+```bash
+POST /wifi-sensors
+Content-Type: application/json
+
+{
+  "sensorCode": "ESP32-003",
+  "locationId": 12
+}
+```
+
+**응답 예시**
+```json
+{
+  "id": 3,
+  "sensorCode": "ESP32-003",
+  "location": {
+    "id": 12,
+    "fullAddress": "정보관 4층 03"
+  },
+  "signalStrength": null,
+  "isActive": false,
+  "lastActiveAt": null,
+  "createdAt": "2025-12-03T14:35:00"
+}
+```
+
+#### DELETE /wifi-sensors/{id} - WiFi 센서 삭제
+
+WiFi 센서를 시스템에서 제거합니다.
+
+**요청 예시**
+```bash
+DELETE /wifi-sensors/3
+```
+
+**응답 예시**
+```
+WiFi_Sensor deleted successfully
+```
+
+#### 사용 시나리오
+
+**1. 센서 목록 표시**
+```javascript
+// 활성 센서만 가져와서 표시
+fetch('/wifi-sensors?active=true')
+  .then(response => response.json())
+  .then(sensors => {
+    sensors.forEach(sensor => {
+      displaySensorOnMap(sensor);
+      // 각 센서의 실시간 신호는 WebSocket으로 구독
+      subscribeToSensor(sensor.sensorCode);
+    });
+  });
+```
+
+**2. 센서 등록 후 WebSocket 구독**
+```javascript
+// 센서 등록
+const newSensor = await fetch('/wifi-sensors', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    sensorCode: 'ESP32-NEW',
+    locationId: 15
+  })
+}).then(res => res.json());
+
+// WebSocket 구독 시작
+stompClient.subscribe(`/topic/wifi-sensor/${newSensor.sensorCode}/signal`, handleSignal);
+```
+
+### 관련 코드
+
+- `WifiDetectionMqttService.java`: MQTT 메시지 수신 및 처리
+- `WifiDetectionProcessorService.java`: 생존자 매칭 및 DB 저장
+- `WifiSensorController.java`: REST API 엔드포인트
+- `WifiSignalDto.java`: WebSocket 브로드캐스트용 DTO
+- `MqttWifiDetectionDto.java`: MQTT 메시지 파싱 DTO
+- `WifiAnalysisDataDto.java`: CSI 분석 데이터 DTO
+- `WebSocketService.java` 및 `WebSocketServiceImpl.java`: WebSocket 브로드캐스트
 
 ---
 
