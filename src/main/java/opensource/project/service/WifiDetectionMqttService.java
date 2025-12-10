@@ -39,56 +39,52 @@ public class WifiDetectionMqttService {
 
     /**
      * MQTT 메시지를 처리하는 메인 메서드
-     * 5초마다 호출되며 생존자 탐지 여부와 무관하게 항상 실행됨
+     * 주기적으로 호출되며 생존자 탐지 여부와 무관하게 항상 실행됨
      *
      * @param mqttData MQTT 브로커로부터 수신한 WiFi 센서 데이터
      */
     @Transactional
     public void processMqttMessage(MqttWifiDetectionDto mqttData) {
-        log.debug("WiFi 탐지 메시지 처리 시작 - 센서: {}, 위치: {}",
-                mqttData.getSensorId(), mqttData.getLocationId());
+        log.debug("WiFi 탐지 메시지 처리 시작 - 센서: {}", mqttData.getSensorId());
 
         try {
             // 1. 입력 데이터 유효성 검증을 수행함
             validateMqttData(mqttData);
 
-            // 2. WiFi 센서 정보를 조회함
-            WifiSensor sensor = wifiSensorRepository.findBySensorCode(mqttData.getSensorId())
+            // 2. WiFi 센서 정보를 ID로 조회함
+            WifiSensor sensor = wifiSensorRepository.findById(mqttData.getSensorId())
                     .orElseThrow(() -> new IllegalArgumentException(
                             "WiFi 센서를 찾을 수 없습니다. 센서 ID: " + mqttData.getSensorId()));
 
-            // 3. 위치 정보를 조회함
-            Location location = locationRepository.findById(mqttData.getLocationId())
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "위치 정보를 찾을 수 없습니다. 위치 ID: " + mqttData.getLocationId()));
+            // 3. 센서에 연결된 위치 정보를 조회함
+            Location location = sensor.getLocation();
+            if (location == null) {
+                throw new IllegalArgumentException("센서에 연결된 위치 정보가 없습니다. 센서 ID: " + mqttData.getSensorId());
+            }
 
-            // 4. 센서의 마지막 활성 시각을 업데이트함
-            sensor.setLastActiveAt(mqttData.getTimestamp());
+            // 4. 타임스탬프를 백엔드에서 생성함 (MQTT 메시지에는 포함되지 않음)
+            java.time.LocalDateTime timestamp = java.time.LocalDateTime.now();
+
+            // 5. 센서의 마지막 활성 시각을 업데이트함
+            sensor.setLastActiveAt(timestamp);
             sensor.setIsActive(true);
-            sensor.setSignalStrength(mqttData.getSignalStrength());
             wifiSensorRepository.save(sensor);
 
-            // 5. WebSocket 브로드캐스트용 DTO를 생성함
-            WifiSignalDto signalDto = WifiSignalDto.fromMqttData(
-                    mqttData,
-                    sensor.getSensorCode(),
-                    location.getFullAddress()
-            );
+            // 6. WebSocket 브로드캐스트용 DTO를 생성함
+            WifiSignalDto signalDto = WifiSignalDto.fromMqttData(mqttData, timestamp);
 
-            // 6. [항상 수행] WebSocket으로 실시간 신호 데이터를 브로드캐스트함
-            // 프론트엔드의 그래프가 5초마다 업데이트됨
+            // 7. [항상 수행] WebSocket으로 실시간 신호 데이터를 브로드캐스트함
+            // 프론트엔드의 그래프가 주기적으로 업데이트됨
             webSocketService.broadcastWifiSignal(mqttData.getSensorId(), signalDto);
             log.debug("WebSocket 브로드캐스트 완료 - 토픽: /topic/wifi-sensor/{}/signal", mqttData.getSensorId());
 
-            // 7. 생존자가 탐지된 경우에만 추가 처리를 수행함
+            // 8. 생존자가 탐지된 경우에만 추가 처리를 수행함
             if (Boolean.TRUE.equals(mqttData.getSurvivorDetected())) {
-                log.info("⚠️ 생존자 탐지됨! 센서: {}, 신뢰도: {}, 신호 강도: {} dBm",
-                        mqttData.getSensorId(),
-                        mqttData.getConfidence(),
-                        mqttData.getSignalStrength());
+                log.info("⚠️ 생존자 탐지됨! 센서: {}, 위치: {}",
+                        mqttData.getSensorId(), location.getFullAddress());
 
                 // 생존자 매칭 및 Detection 레코드 DB 저장을 수행함
-                wifiDetectionProcessorService.processDetection(mqttData, sensor, location, signalDto);
+                wifiDetectionProcessorService.processDetection(mqttData, sensor, location, signalDto, timestamp);
 
                 log.info("생존자 탐지 처리 완료 - 센서: {}", mqttData.getSensorId());
             } else {
@@ -118,52 +114,18 @@ public class WifiDetectionMqttService {
             throw new IllegalArgumentException("MQTT 데이터가 null입니다.");
         }
 
-        if (mqttData.getSensorId() == null || mqttData.getSensorId().trim().isEmpty()) {
-            throw new IllegalArgumentException("센서 ID가 null이거나 비어있습니다.");
-        }
-
-        if (mqttData.getLocationId() == null) {
-            throw new IllegalArgumentException("위치 ID가 null입니다.");
+        if (mqttData.getSensorId() == null) {
+            throw new IllegalArgumentException("센서 ID가 null입니다.");
         }
 
         if (mqttData.getSurvivorDetected() == null) {
             throw new IllegalArgumentException("생존자 탐지 여부가 null입니다.");
         }
 
-        if (mqttData.getTimestamp() == null) {
-            throw new IllegalArgumentException("타임스탬프가 null입니다.");
-        }
-
-        // 생존자가 탐지된 경우 추가 필드 검증을 수행함
-        if (Boolean.TRUE.equals(mqttData.getSurvivorDetected())) {
-            if (mqttData.getConfidence() == null || mqttData.getConfidence() < 0.0 || mqttData.getConfidence() > 1.0) {
-                throw new IllegalArgumentException("신뢰도 값이 유효하지 않습니다. 0.0 ~ 1.0 범위여야 합니다.");
-            }
-
-            if (mqttData.getCsiAnalysis() == null) {
-                log.warn("생존자가 탐지되었으나 CSI 분석 데이터가 없습니다. 센서: {}", mqttData.getSensorId());
-            }
+        if (mqttData.getCsiAmplitudeSummary() == null || mqttData.getCsiAmplitudeSummary().isEmpty()) {
+            throw new IllegalArgumentException("CSI 진폭 데이터가 null이거나 비어있습니다.");
         }
 
         log.debug("MQTT 데이터 유효성 검증 완료");
-    }
-
-    /**
-     * CSI 분석 데이터를 JSON 문자열로 직렬화함
-     * Detection 엔티티의 rawData 필드에 저장하기 위해 사용됨
-     *
-     * @param mqttData MQTT 데이터 (CSI 분석 데이터 포함)
-     * @return JSON 문자열 (실패 시 빈 객체 "{}")
-     */
-    public String serializeCsiAnalysisToJson(MqttWifiDetectionDto mqttData) {
-        try {
-            if (mqttData.getCsiAnalysis() != null) {
-                return objectMapper.writeValueAsString(mqttData.getCsiAnalysis());
-            }
-            return "{}";
-        } catch (JsonProcessingException e) {
-            log.error("CSI 분석 데이터 JSON 직렬화 실패: {}", e.getMessage(), e);
-            return "{}";
-        }
     }
 }

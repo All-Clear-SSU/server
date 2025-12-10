@@ -92,7 +92,6 @@ class BasicServiceTest {
 
         // given - WiFi 센서 생성 요청
         WifiSensorRequestDto sensorDto = WifiSensorRequestDto.builder()
-                .sensorCode("SENSOR-001")
                 .locationId(location.getId())
                 .status(SensorStatus.ACTIVE)
                 .signalStrength(-45)
@@ -136,7 +135,6 @@ class BasicServiceTest {
 
         // 3. WiFi 센서 생성
         WifiSensorRequestDto sensorDto = WifiSensorRequestDto.builder()
-                .sensorCode("INTEGRATED-SENSOR-001")
                 .locationId(location.getId())
                 .status(SensorStatus.ACTIVE)
                 .signalStrength(-50)

@@ -62,10 +62,10 @@ public class SurvivorServiceImpl implements SurvivorService {
         return responseDto;
     }
 
-    // 생존자 엔터티의 모든 인스턴스 반환
+    // 생존자 엔터티의 모든 인스턴스 반환 (활성 생존자만)
     @Override
     public List<SurvivorResponseDto> getAllSurvivors() {
-        return survivorRepository.findAll().stream()
+        return survivorRepository.findByIsActiveTrue().stream()
                 .map(SurvivorResponseDto::from)
                 .collect(Collectors.toList());
     }

@@ -25,16 +25,14 @@ public class WifiSensorServiceImpl implements WifiSensorService {
     @Override
     @Transactional
     public WifiSensorResponseDto createWifiSensor(WifiSensorRequestDto requestDto) {
-        // WiFi 센서 id가 이미 존재하는지 확인
-        if (wifiSensorRepository.findBySensorCode(requestDto.getSensorCode()).isPresent()) {
-            throw new IllegalArgumentException("Sensor code already exists: " + requestDto.getSensorCode());
-        }
-
         Location location = locationRepository.findById(requestDto.getLocationId())
                 .orElseThrow(() -> new IllegalArgumentException("Location not found with id: " + requestDto.getLocationId()));
 
+        // sensorCode 자동 생성: "WIFI-SENSOR-{timestamp}"
+        String sensorCode = "WIFI-SENSOR-" + System.currentTimeMillis();
+
         WifiSensor wifiSensor = WifiSensor.builder()
-                .sensorCode(requestDto.getSensorCode())
+                .sensorCode(sensorCode)
                 .location(location)
                 .status(requestDto.getStatus())
                 .signalStrength(requestDto.getSignalStrength())
@@ -79,17 +77,10 @@ public class WifiSensorServiceImpl implements WifiSensorService {
         WifiSensor wifiSensor = wifiSensorRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("WifiSensor not found with id: " + id));
 
-        // 중복된 Id인지 검사
-        if (!wifiSensor.getSensorCode().equals(requestDto.getSensorCode())) {
-            if (wifiSensorRepository.findBySensorCode(requestDto.getSensorCode()).isPresent()) {
-                throw new IllegalArgumentException("Sensor code already exists: " + requestDto.getSensorCode());
-            }
-        }
-
         Location location = locationRepository.findById(requestDto.getLocationId())
                 .orElseThrow(() -> new IllegalArgumentException("Location not found with id: " + requestDto.getLocationId()));
 
-        wifiSensor.setSensorCode(requestDto.getSensorCode());
+        // sensorCode는 수정하지 않음 (자동 생성된 값 유지)
         wifiSensor.setLocation(location);
         wifiSensor.setStatus(requestDto.getStatus());
         wifiSensor.setSignalStrength(requestDto.getSignalStrength());

@@ -52,8 +52,8 @@ public interface WebSocketService {
      * - 평상시: 그래프만 업데이트 (survivorDetected = false)
      * - 생존자 탐지 시: 그래프 업데이트 + 특수 효과 트리거 (survivorDetected = true)
      *
-     * @param sensorId WiFi 센서 ID (예: "ESP32-001")
+     * @param sensorId WiFi 센서 ID (데이터베이스 ID, 예: 1, 2, 3)
      * @param signalData 신호 데이터 (CSI 분석 결과, 신호 강도, 생존자 탐지 여부 등 포함)
      */
-    void broadcastWifiSignal(String sensorId, WifiSignalDto signalData);
+    void broadcastWifiSignal(Long sensorId, WifiSignalDto signalData);
 }

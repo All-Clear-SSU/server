@@ -2,6 +2,8 @@ package opensource.project.repository;
 
 import opensource.project.domain.WifiSensor;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -26,4 +28,14 @@ public interface WifiSensorRepository extends JpaRepository<WifiSensor, Long> {
      * @return 활성 센서 목록
      */
     List<WifiSensor> findByIsActive(Boolean isActive);
+
+    /**
+     * [추가] Location을 함께 조회하는 WiFi 센서 조회 메서드
+     * 비동기 스레드에서 LazyInitializationException을 방지하기 위해 사용
+     *
+     * @param id 센서 ID
+     * @return Location과 함께 조회된 WifiSensor Optional
+     */
+    @Query("SELECT s FROM WifiSensor s LEFT JOIN FETCH s.location WHERE s.id = :id")
+    Optional<WifiSensor> findByIdWithLocation(@Param("id") Long id);
 }

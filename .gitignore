@@ -15,6 +15,7 @@ OriginModelFile/
 *.gz
 *.log
 venv_convert/
+*.onnx
 
 service1.py
 yolo_model1.py

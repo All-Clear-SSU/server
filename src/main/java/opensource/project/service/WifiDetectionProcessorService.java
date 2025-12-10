@@ -28,13 +28,14 @@ import java.util.List;
  * WiFi 센서로 생존자가 탐지된 경우 생존자 매칭 및 Detection 레코드를 생성하는 서비스
  *
  * 주요 역할:
- * 1. 같은 위치의 최근 생존자를 조회하여 기존 생존자와 매칭을 시도함
+ * 1. 같은 센서의 최근 생존자를 조회하여 기존 생존자와 매칭을 시도함
  * 2. 매칭되지 않으면 새로운 생존자를 생성함
- * 3. Detection 레코드를 생성하여 DB에 저장함 (DetectionType.WIFI)
- * 4. WebSocket으로 생존자 및 탐지 정보를 실시간 브로드캐스트함
+[ * 3. Detection 레코드를 생성하여 DB에 저장함 (DetectionType.WIFI)
+] * 4. WebSocket으로 생존자 및 탐지 정보를 실시간 브로드캐스트함
  *
  * 생존자 매칭 로직:
- * - 같은 위치(Location)에서 최근 10분 이내에 WiFi로 탐지된 생존자가 있으면 재사용함
+ * - 같은 센서에서 최근 10분 이내에 WiFi로 탐지된 생존자가 있으면 재사용함
+ * - WiFi 센서는 각각 고유한 생존자를 추적함 (센서 ID별로 구분)
  * - 없으면 새로운 생존자로 등록함
  */
 @Slf4j
@@ -49,8 +50,8 @@ public class WifiDetectionProcessorService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 생존자 매칭 시 사용할 시간 임계값 (분 단위)
-     * 이 시간 이내에 같은 위치에서 탐지된 생존자가 있으면 동일 생존자로 판단함
+     * 생존자 매칭 시 사용할 시간 임계값 (현재 10분 단위)
+     * 이 시간 이내에 같은 센서에서 탐지된 생존자가 있으면 동일 생존자로 판단함
      */
     private static final int TIME_THRESHOLD_MINUTES = 10;
 
@@ -62,19 +63,21 @@ public class WifiDetectionProcessorService {
      * @param sensor WiFi 센서 엔티티
      * @param location 위치 엔티티
      * @param signalDto WebSocket 브로드캐스트용 신호 데이터 (생존자 정보를 업데이트할 예정)
+     * @param timestamp 백엔드에서 생성한 타임스탬프
      */
     @Transactional
     public void processDetection(MqttWifiDetectionDto mqttData,
                                   WifiSensor sensor,
                                   Location location,
-                                  WifiSignalDto signalDto) {
-        log.info("WiFi 생존자 탐지 처리 시작 - 센서: {}, 위치: {}, 신뢰도: {}",
-                sensor.getSensorCode(), location.getFullAddress(), mqttData.getConfidence());
+                                  WifiSignalDto signalDto,
+                                  LocalDateTime timestamp) {
+        log.info("WiFi 생존자 탐지 처리 시작 - 센서: {}, 위치: {}",
+                sensor.getSensorCode(), location.getFullAddress());
 
-        LocalDateTime now = mqttData.getTimestamp();
+        LocalDateTime now = timestamp;
 
-        // 1. 기존 생존자를 찾거나 새로 생성함
-        Survivor survivor = findOrCreateSurvivor(location, now);
+        // 1. 기존 생존자를 찾거나 새로 생성함 (센서별로 구분)
+        Survivor survivor = findOrCreateSurvivor(sensor, location, now);
         boolean isNewSurvivor = survivor.getId() == null;
 
         // 2. 생존자 정보를 업데이트함
@@ -104,7 +107,10 @@ public class WifiDetectionProcessorService {
         log.info("Detection 레코드 저장 완료 - Detection ID: {}, 탐지 타입: WIFI", savedDetection.getId());
 
         // 7. WebSocket으로 탐지 정보를 브로드캐스트함
-        DetectionResponseDto detectionDto = DetectionResponseDto.from(savedDetection);
+        // LazyInitializationException 방지를 위해 모든 관계를 함께 조회
+        Detection detectionWithRelations = detectionRepository.findByIdWithRelations(savedDetection.getId())
+                .orElseThrow(() -> new RuntimeException("Detection을 찾을 수 없습니다: " + savedDetection.getId()));
+        DetectionResponseDto detectionDto = DetectionResponseDto.from(detectionWithRelations);
         webSocketService.broadcastDetectionUpdate(survivor.getId(), detectionDto);
 
         log.info("WiFi 생존자 탐지 처리 완료 - 생존자 ID: {}, Detection ID: {}",
@@ -112,14 +118,15 @@ public class WifiDetectionProcessorService {
     }
 
     /**
-     * 같은 위치의 최근 생존자를 찾거나 새로운 생존자를 생성함
-     * WiFi 탐지의 경우 정확한 위치 매칭만 수행함 (CCTV의 바운딩박스 매칭과 다름)
+     * 같은 센서의 최근 생존자를 찾거나 새로운 생존자를 생성함
+     * WiFi 센서는 각각 고유한 생존자를 추적함 (센서 ID별로 구분)
      *
+     * @param sensor WiFi 센서
      * @param location 탐지 위치
      * @param detectionTime 탐지 시각
      * @return 기존 생존자 또는 새로 생성된 생존자 (아직 DB에 저장되지 않음)
      */
-    private Survivor findOrCreateSurvivor(Location location, LocalDateTime detectionTime) {
+    private Survivor findOrCreateSurvivor(WifiSensor sensor, Location location, LocalDateTime detectionTime) {
         LocalDateTime timeThreshold = detectionTime.minusMinutes(TIME_THRESHOLD_MINUTES);
 
         // 같은 위치에서 최근 N분 이내에 WiFi로 탐지된 활성 생존자를 조회함
@@ -128,21 +135,34 @@ public class WifiDetectionProcessorService {
                 timeThreshold
         );
 
-        // WiFi로 탐지된 생존자만 필터링함 (DetectionMethod.WIFI)
+        // ✅ WiFi로 탐지되고, 같은 센서로 탐지된 생존자를 찾음
+        // Detection 테이블을 조회하여 마지막 탐지가 같은 센서인지 확인
         Survivor matchedSurvivor = recentSurvivors.stream()
                 .filter(s -> DetectionMethod.WIFI.equals(s.getDetectionMethod()))
+                .filter(s -> {
+                    // 해당 생존자의 최근 Detection을 조회하여 센서 ID 확인
+                    List<Detection> detections = detectionRepository.findBySurvivorIdOrderByDetectedAtDesc(s.getId());
+                    if (!detections.isEmpty()) {
+                        Detection latestDetection = detections.get(0);
+                        // 같은 WiFi 센서인지 확인
+                        return latestDetection.getWifiSensor() != null
+                                && latestDetection.getWifiSensor().getId().equals(sensor.getId());
+                    }
+                    return false;
+                })
                 .findFirst()
                 .orElse(null);
 
         if (matchedSurvivor != null) {
-            log.debug("기존 생존자 매칭 성공 - 생존자 ID: {}, 마지막 탐지: {}분 전",
+            log.debug("기존 생존자 매칭 성공 - 생존자 ID: {}, 센서 ID: {}, 마지막 탐지: {}분 전",
                     matchedSurvivor.getId(),
+                    sensor.getId(),
                     java.time.Duration.between(matchedSurvivor.getLastDetectedAt(), detectionTime).toMinutes());
             return matchedSurvivor;
         }
 
         // 매칭된 생존자가 없으면 새로운 생존자를 생성함
-        log.debug("매칭된 생존자 없음 - 새로운 생존자 생성 예정");
+        log.debug("매칭된 생존자 없음 - 새로운 생존자 생성 예정 (센서 ID: {})", sensor.getId());
         return Survivor.builder()
                 .survivorNumber(generateNextSurvivorNumber())
                 .location(location)
@@ -192,8 +212,8 @@ public class WifiDetectionProcessorService {
                                        WifiSensor sensor,
                                        Location location,
                                        LocalDateTime detectionTime) {
-        // CSI 분석 데이터를 JSON 문자열로 직렬화함
-        String csiAnalysisJson = serializeCsiAnalysisToJson(mqttData);
+        // CSI 진폭 데이터를 JSON 문자열로 직렬화함
+        String csiDataJson = serializeCsiDataToJson(mqttData);
 
         // Detection 엔티티를 생성함
         Detection detection = Detection.builder()
@@ -204,11 +224,11 @@ public class WifiDetectionProcessorService {
                 .location(location)
                 .detectedAt(detectionTime)
                 .detectedStatus(survivor.getCurrentStatus())
-                .aiAnalysisResult(csiAnalysisJson)  // CSI 분석 데이터 (JSON)
+                .aiAnalysisResult(csiDataJson)  // CSI 진폭 데이터 (JSON)
                 .aiModelVersion("WiFi-CSI-AI-v1.0")  // AI 모델 버전
-                .confidence(mqttData.getConfidence())
-                .signalStrength(mqttData.getSignalStrength())
-                .rawData(csiAnalysisJson)  // 원시 데이터 (CSI 분석 결과)
+                .confidence(null)  // WiFi 탐지는 신뢰도 미사용
+                .signalStrength(null)  // WiFi 탐지는 신호강도 미사용
+                .rawData(csiDataJson)  // 원시 데이터 (CSI 진폭 배열)
                 // CCTV 전용 필드는 null로 설정됨
                 .fireCount(null)
                 .humanCount(null)
@@ -219,30 +239,30 @@ public class WifiDetectionProcessorService {
                 .analyzedImage(null)
                 .build();
 
-        log.debug("Detection 엔티티 생성 완료 - 탐지 타입: WIFI, 신뢰도: {}, 신호 강도: {} dBm",
-                mqttData.getConfidence(), mqttData.getSignalStrength());
+        log.debug("Detection 엔티티 생성 완료 - 탐지 타입: WIFI, CSI 데이터 크기: {}",
+                mqttData.getCsiAmplitudeSummary().size());
 
         return detection;
     }
 
     /**
-     * CSI 분석 데이터를 JSON 문자열로 직렬화함
+     * CSI 진폭 데이터를 JSON 문자열로 직렬화함
      * Detection 엔티티의 rawData 및 aiAnalysisResult 필드에 저장하기 위해 사용됨
      *
-     * @param mqttData MQTT 데이터 (CSI 분석 데이터 포함)
-     * @return JSON 문자열 (실패 시 빈 객체 "{}")
+     * @param mqttData MQTT 데이터 (CSI 진폭 데이터 포함)
+     * @return JSON 문자열 (실패 시 빈 배열 "[]")
      */
-    private String serializeCsiAnalysisToJson(MqttWifiDetectionDto mqttData) {
+    private String serializeCsiDataToJson(MqttWifiDetectionDto mqttData) {
         try {
-            if (mqttData.getCsiAnalysis() != null) {
-                return objectMapper.writeValueAsString(mqttData.getCsiAnalysis());
+            if (mqttData.getCsiAmplitudeSummary() != null && !mqttData.getCsiAmplitudeSummary().isEmpty()) {
+                return objectMapper.writeValueAsString(mqttData.getCsiAmplitudeSummary());
             } else {
-                log.warn("CSI 분석 데이터가 null입니다. 빈 JSON 객체로 저장합니다.");
-                return "{}";
+                log.warn("CSI 진폭 데이터가 null이거나 비어있습니다. 빈 JSON 배열로 저장합니다.");
+                return "[]";
             }
         } catch (JsonProcessingException e) {
-            log.error("CSI 분석 데이터 JSON 직렬화 실패: {}", e.getMessage(), e);
-            return "{}";
+            log.error("CSI 진폭 데이터 JSON 직렬화 실패: {}", e.getMessage(), e);
+            return "[]";
         }
     }
 

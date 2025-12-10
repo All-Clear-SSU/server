@@ -1,6 +1,5 @@
 package opensource.project.dto;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import opensource.project.domain.enums.SensorStatus;
@@ -11,9 +10,6 @@ import opensource.project.domain.enums.SensorStatus;
 @AllArgsConstructor
 @Builder
 public class WifiSensorRequestDto {
-
-    @NotBlank(message = "센서 코드는 필수입니다")
-    private String sensorCode;
 
     @NotNull(message = "위치 ID는 필수입니다")
     private Long locationId;

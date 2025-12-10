@@ -74,6 +74,15 @@ public class RiskScoreCalculator {
             return 2.0;
         }
 
+        // [대안] 연기가 조금이라도 감지되면 환경 승수 2.0 적용
+        // 아래 코드로 변경하면 연기 양과 관계없이 연기 감지 시 즉시 2.0 적용됨
+        /*
+        boolean smokeDetected = summary.getSmokeCount() != null && summary.getSmokeCount() > 0;
+        if (smokeDetected) {
+            return 2.0;
+        }
+        */
+
         // 3. 방 전체로 화재 확산 (x 1.5) - fire 박스의 면적이 전체 화면의 30% 이상
         if (environmentalAnalysisService.checkLargeFireArea(allDetections)) {
             return 1.5;

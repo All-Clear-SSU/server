@@ -3,14 +3,19 @@ package opensource.project.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
 
-import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * MQTT 브로커로부터 수신한 WiFi 센서 탐지 메시지를 파싱하는 DTO
- * ESP32 모듈이 5초마다 발행하는 CSI 신호 분석 결과를 담음
+ * ESP32 모듈이 주기적으로 발행하는 CSI 신호 분석 결과를 담음
  *
  * 메시지 흐름:
  * ESP32 → MQTT 브로커 → Spring Boot (이 DTO로 파싱) → 비즈니스 로직 처리
+ *
+ * ESP32에서 전송하는 데이터:
+ * - sensor_id: WiFi 센서 ID
+ * - survivor_detected: 생존자 탐지 여부
+ * - csi_amplitude_summary: CSI 진폭 배열
  */
 @Getter
 @Setter
@@ -20,21 +25,12 @@ import java.time.LocalDateTime;
 public class MqttWifiDetectionDto {
 
     /**
-     * WiFi 센서 ID (고유 식별자)
-     * ESP32 모듈의 MAC 주소 또는 사용자 정의 ID를 사용함
-     * 예: "ESP32-001", "ESP32-AABBCCDDEE"
-     * WifiSensor 엔티티의 sensorCode와 매칭됨
+     * WiFi 센서 ID (데이터베이스 Primary Key)
+     * WifiSensor 엔티티의 id와 직접 매칭됨
+     * 예: 1, 2, 3
      */
     @JsonProperty("sensor_id")
-    private String sensorId;
-
-    /**
-     * 위치 ID
-     * 센서가 설치된 위치를 나타냄
-     * Location 엔티티의 id와 매칭됨
-     */
-    @JsonProperty("location_id")
-    private Long locationId;
+    private Long sensorId;
 
     /**
      * 생존자 탐지 여부
@@ -46,49 +42,11 @@ public class MqttWifiDetectionDto {
     private Boolean survivorDetected;
 
     /**
-     * 전체 신호 강도 (RSSI, dBm 단위)
-     * 수신 신호 강도 지표로, 센서와 생존자 간 대략적인 거리를 추정하는 데 사용됨
-     * 일반적인 범위: -30 dBm (매우 가까움) ~ -90 dBm (매우 멀거나 약함)
+     * CSI 진폭 요약 데이터
+     * ESP32에서 계산한 각 부반송파의 진폭값 배열 (일반적으로 34개 또는 52개)
+     * 프론트엔드 그래프 렌더링에 직접 사용됨
+     * 예: [12.3, 15.7, 18.2, 21.5, ..., 22.1]
      */
-    @JsonProperty("signal_strength")
-    private Integer signalStrength;
-
-    /**
-     * AI 모델의 탐지 신뢰도 (0.0 ~ 1.0)
-     * 생존자가 실제로 존재할 확률을 나타냄
-     * 0.5 미만: 낮은 신뢰도, 0.5~0.8: 중간 신뢰도, 0.8 이상: 높은 신뢰도
-     */
-    @JsonProperty("confidence")
-    private Double confidence;
-
-    /**
-     * 메시지 생성 시각
-     * ESP32 모듈이 CSI 데이터를 수집하고 메시지를 생성한 시각
-     */
-    @JsonProperty("timestamp")
-    private LocalDateTime timestamp;
-
-    /**
-     * CSI 신호 분석 데이터
-     * ESP32에서 수집한 CSI 원시 데이터 및 AI 분석 결과를 포함함
-     * 그래프 렌더링에 필요한 모든 정보가 담겨 있음
-     */
-    @JsonProperty("csi_analysis")
-    private WifiAnalysisDataDto csiAnalysis;
-
-    /**
-     * 센서 배터리 잔량 (퍼센트, 0~100)
-     * 배터리로 작동하는 ESP32 모듈의 경우 잔량을 전송함
-     * null인 경우 유선 전원 사용 중
-     */
-    @JsonProperty("battery_level")
-    private Integer batteryLevel;
-
-    /**
-     * 센서 상태 메시지
-     * 센서의 현재 상태나 오류 정보를 담음
-     * 예: "OK", "LOW_BATTERY", "CALIBRATING", "ERROR"
-     */
-    @JsonProperty("status_message")
-    private String statusMessage;
+    @JsonProperty("csi_amplitude_summary")
+    private List<Double> csiAmplitudeSummary;
 }

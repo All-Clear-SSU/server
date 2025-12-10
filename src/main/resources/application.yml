@@ -6,11 +6,18 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: oracle.jdbc.OracleDriver
 
+# 밑 코드 주석 해제 시 http 요청/응답 로그 출력
+# Spring Boot의 기본 로그 레벨이 INFO라서 DEBUG는 출력되지 않음
+#  logging:
+#    level:
+#      opensource.project.config.LoggingInterceptor: DEBUG
+#      org.hibernate.SQL: DEBUG
+
   jpa:
     hibernate:
       # 개발: update, 운영: validate (스키마 자동 업데이트)
       ddl-auto: update
-    show-sql: true
+    show-sql: false # true로 바꾸면 sql 실행되는 것 로그에 뜸
     properties:
       hibernate:
         dialect: org.hibernate.dialect.OracleDialect
