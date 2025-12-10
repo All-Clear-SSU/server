@@ -3,7 +3,6 @@ package opensource.project.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import opensource.project.dto.LiveStreamResponseDto;
@@ -35,10 +34,25 @@ public class LiveStreamController {
     @Operation(summary = "라이브 스트리밍 시작", description = "CCTV ID와 위치 ID를 받아 라이브 스트리밍을 시작합니다.")
     @PostMapping("/start")
     public ResponseEntity<LiveStreamResponseDto> startLiveStream(
-            @Valid @RequestBody LiveStreamStartRequestDto requestDto) {
+            @Parameter(description = "CCTV ID", required = true)
+            @RequestParam Long cctvId,
+
+            @Parameter(description = "위치 ID", required = true)
+            @RequestParam Long locationId,
+
+            @Parameter(description = "객체 탐지 신뢰도 임계값 (기본값: 0.3)")
+            @RequestParam(required = false) Double confThreshold,
+
+            @Parameter(description = "자세 분류 신뢰도 임계값 (기본값: 0.3)")
+            @RequestParam(required = false) Double poseConfThreshold) {
 
         log.info("=== Live Stream Start Request ===");
-        log.info("CCTV ID: {}, Location ID: {}", requestDto.getCctvId(), requestDto.getLocationId());
+        log.info("CCTV ID: {}, Location ID: {}", cctvId, locationId);
+
+        // RequestDto 생성
+        LiveStreamStartRequestDto requestDto = new LiveStreamStartRequestDto(
+                cctvId, locationId, confThreshold, poseConfThreshold
+        );
 
         LiveStreamResponseDto response = liveStreamService.startLiveStream(requestDto);
 

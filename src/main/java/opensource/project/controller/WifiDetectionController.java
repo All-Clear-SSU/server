@@ -33,7 +33,7 @@ public class WifiDetectionController {
      * 특정 WiFi 센서의 최근 N개 탐지 기록을 조회함
      * 페이지 로드 시 그래프를 초기화하는 데 사용됨
      *
-     * @param sensorId WiFi 센서 코드 (예: "ESP32-001")
+     * @param sensorId WiFi 센서 ID (데이터베이스 ID, 예: 1, 2, 3)
      * @param limit 조회할 최대 개수 (기본값: 50, 최대값: 200)
      * @return 최근 탐지 기록 목록 (최신순)
      */
@@ -45,21 +45,21 @@ public class WifiDetectionController {
     )
     @GetMapping("/sensor/{sensorId}/recent")
     public ResponseEntity<List<WifiDetectionRecordDto>> getRecentDetections(
-            @Parameter(description = "WiFi 센서 코드 (예: ESP32-001)", required = true)
-            @PathVariable String sensorId,
+            @Parameter(description = "WiFi 센서 ID (데이터베이스 ID, 예: 1, 2, 3)", required = true)
+            @PathVariable Long sensorId,
 
             @Parameter(description = "조회할 최대 개수 (기본값: 50, 최대값: 200)")
             @RequestParam(required = false, defaultValue = "50") Integer limit
     ) {
         log.info("=== WiFi 센서 최근 탐지 기록 조회 API 호출 ===");
-        log.info("센서 코드: {}, limit: {}", sensorId, limit);
+        log.info("센서 ID (DB): {}, limit: {}", sensorId, limit);
 
         try {
             // WiFi 센서의 최근 탐지 기록을 조회함
             List<WifiDetectionRecordDto> detections = wifiDetectionService.getRecentDetections(sensorId, limit);
 
             log.info("=== WiFi 센서 탐지 기록 조회 성공 ===");
-            log.info("센서 코드: {}, 조회된 개수: {}", sensorId, detections.size());
+            log.info("센서 ID (DB): {}, 조회된 개수: {}", sensorId, detections.size());
 
             return ResponseEntity.ok(detections);
 

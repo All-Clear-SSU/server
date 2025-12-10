@@ -23,7 +23,7 @@ public class GlobalExceptionHandler {
                 error.getRejectedValue(),
                 error.getDefaultMessage());
         });
-        log.error("=========================");
+        log.error("=============================");
 
         String message = e.getBindingResult()
                 .getFieldErrors()

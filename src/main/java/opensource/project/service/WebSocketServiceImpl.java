@@ -72,28 +72,27 @@ public class WebSocketServiceImpl implements WebSocketService {
      *
      * 구독 토픽: /topic/wifi-sensor/{sensorId}/signal
      *
-     * @param sensorId WiFi 센서 ID (예: "ESP32-001")
+     * @param sensorId WiFi 센서 ID (데이터베이스 ID, 예: 1, 2, 3)
      * @param signalData 신호 데이터 (CSI 분석 결과, 신호 강도, 생존자 탐지 여부 등)
      */
     @Override
-    public void broadcastWifiSignal(String sensorId, WifiSignalDto signalData) {
+    public void broadcastWifiSignal(Long sensorId, WifiSignalDto signalData) {
         String destination = "/topic/wifi-sensor/" + sensorId + "/signal";
         messagingTemplate.convertAndSend(destination, signalData);
 
         // 생존자가 탐지된 경우에만 상세 로그를 남김 (평상시에는 로그 스팸 방지)
         if (Boolean.TRUE.equals(signalData.getSurvivorDetected())) {
-            log.info("⚠️ [생존자 탐지!] WiFi 신호 브로드캐스트 - 토픽: {}, 센서: {}, 생존자 ID: {}, 신호 강도: {} dBm, 신뢰도: {}",
+            log.info("⚠️ [생존자 탐지!] WiFi 신호 브로드캐스트 - 토픽: {}, 센서: {}, 생존자 ID: {}, CSI 크기: {}",
                     destination,
                     sensorId,
                     signalData.getSurvivorId(),
-                    signalData.getSignalStrength(),
-                    signalData.getConfidence());
+                    signalData.getCsiAmplitudeSummary() != null ? signalData.getCsiAmplitudeSummary().size() : 0);
         } else {
             // 평상시에는 DEBUG 레벨로 로그를 남김 (운영 환경에서는 출력되지 않음)
-            log.debug("WiFi 신호 브로드캐스트 - 토픽: {}, 센서: {}, 신호 강도: {} dBm, 생존자 탐지: {}",
+            log.debug("WiFi 신호 브로드캐스트 - 토픽: {}, 센서: {}, CSI 크기: {}, 생존자 탐지: {}",
                     destination,
                     sensorId,
-                    signalData.getSignalStrength(),
+                    signalData.getCsiAmplitudeSummary() != null ? signalData.getCsiAmplitudeSummary().size() : 0,
                     signalData.getSurvivorDetected());
         }
     }

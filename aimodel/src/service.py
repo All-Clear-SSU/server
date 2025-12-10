@@ -2,7 +2,7 @@
 ===============================================================================
 [수정 이력] service.py - 원본 대비 변경사항
 ===============================================================================
-1. import 경로 변경 8.
+1. import 경로 변경
    - 원본: from .yolo_model import YOLOOnnx (상대 경로)
    - 수정: from yolo_model import YOLOOnnx (절대 경로)
    - 이유: EC2 배포 시 직접 실행 방식과 호환성 확보
@@ -37,7 +37,7 @@
     - post("/stop_live_stream"): 라이브 스트리밍 분석 중단
     - get("/stream_status/{cctv_id}"): 라이브 스트리밍 상태 조회
 """
-==================================================
+# ==================================================
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -59,6 +59,10 @@ from yolo_pose_model import YOLOPoseOnnx
 # 작업 디렉토리와 관계없이 안정적인 경로 참조를 위해 절대 경로로 변경
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, "model", "best_human.onnx")
+# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11x.onnx")  # x-large: 정확도 최고, 실시간 스트리밍 ❌
+# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11m.onnx")  # medium: 정확도 우선, 고사양 필요
+# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11s.onnx")  # small: 균형, 실시간 스트리밍 ✅
+COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11n.onnx")  # nano: 속도 최고, 실시간 스트리밍 ✅✅ (권장)
 CLASS_NAMES = ["fire", "human", "smoke"]
 
 # --- POSE MODEL CONFIG ---
@@ -86,18 +90,25 @@ DEFAULT_POSE_CONF_THRESHOLD = 0.3
 
 # ----------------- INIT -----------------
 # ============ 수정 사항: 모델 로딩 안정성 개선 ============
-# 1. 기본 객체 탐지 모델 (fire, human, smoke)
-# 원본: yolo = YOLOOnnx(MODEL_PATH, CLASS_NAMES) (검증 없이 바로 로드)
-# 추가: 모델 파일 존재 여부 및 크기 확인 로그
-print(f"Loading YOLO model from: {MODEL_PATH}")
-print(f"Model file exists: {os.path.exists(MODEL_PATH)}")
+# 1. 기본 객체 탐지 모델 (fire, human, smoke) + COCO 모델 (person)
+# 원본: yolo = YOLOOnnx(MODEL_PATH, CLASS_NAMES) (단일 모델)
+# 수정: yolo = YOLOOnnx(MODEL_PATH, COCO_MODEL_PATH, CLASS_NAMES) (하이브리드 모델)
+print(f"Loading Custom YOLO model from: {MODEL_PATH}")
+print(f"Custom model file exists: {os.path.exists(MODEL_PATH)}")
 if os.path.exists(MODEL_PATH):
-    print(f"Model file size: {os.path.getsize(MODEL_PATH)} bytes")
+    print(f"Custom model file size: {os.path.getsize(MODEL_PATH)} bytes")
 else:
-    print(f"ERROR: Model file not found at {MODEL_PATH}")
+    print(f"ERROR: Custom model file not found at {MODEL_PATH}")
     print(f"Directory contents: {os.listdir(os.path.dirname(MODEL_PATH)) if os.path.exists(os.path.dirname(MODEL_PATH)) else 'Directory not found'}")
 
-yolo = YOLOOnnx(MODEL_PATH, CLASS_NAMES)
+print(f"Loading COCO model from: {COCO_MODEL_PATH}")
+print(f"COCO model file exists: {os.path.exists(COCO_MODEL_PATH)}")
+if os.path.exists(COCO_MODEL_PATH):
+    print(f"COCO model file size: {os.path.getsize(COCO_MODEL_PATH)} bytes")
+else:
+    print(f"ERROR: COCO model file not found at {COCO_MODEL_PATH}")
+
+yolo = YOLOOnnx(MODEL_PATH, COCO_MODEL_PATH, CLASS_NAMES)
 
 # 2. 자세 분류 모델 (Crawling, Falling, Sitting, Standing)
 # YOLOPoseOnnx 클래스를 사용하여 초기화
@@ -123,6 +134,15 @@ class StartLiveStreamRequest(BaseModel):
     rtsp_url: str
     cctv_id: int
     location_id: int
+    conf_threshold: Optional[float] = DEFAULT_DETECTION_CONF_THRESHOLD
+    pose_conf_threshold: Optional[float] = DEFAULT_POSE_CONF_THRESHOLD
+
+class AnalyzeVideoRequest(BaseModel):
+    video_path: str
+    cctv_id: int
+    location_id: int
+    spring_boot_url: Optional[str] = SPRING_BOOT_URL
+    output_stream_dir: Optional[str] = STREAM_OUTPUT_DIR
     conf_threshold: Optional[float] = DEFAULT_DETECTION_CONF_THRESHOLD
     pose_conf_threshold: Optional[float] = DEFAULT_POSE_CONF_THRESHOLD
 
@@ -247,6 +267,24 @@ class StreamManager:
 stream_manager = StreamManager()
 
 # ----------------- HELPER FUNCTION -----------------
+def convert_to_serializable(obj):
+    """
+    numpy 타입을 JSON 직렬화 가능한 Python 기본 타입으로 변환
+    int64, float64 등 numpy 타입이 JSON 직렬화 시 에러를 발생시키는 문제 해결
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_to_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    else:
+        return obj
+
 def draw_pose_predictions(img, detections):
     """
     새로운 detections JSON 구조를 기반으로 모든 바운딩 박스와 레이블을 그립니다
@@ -498,26 +536,12 @@ async def predict_image_with_pose(
 # 결과를 Spring Boot API로 전송하며, HLS 스트리밍 파일을 생성
 # ====================================================================
 @app.post("/analyze_video")
-async def analyze_video(
-    video_path: str,
-    cctv_id: int,
-    location_id: int,
-    spring_boot_url: str = SPRING_BOOT_URL,
-    output_stream_dir: str = STREAM_OUTPUT_DIR,
-    conf_threshold: float = DEFAULT_DETECTION_CONF_THRESHOLD,
-    pose_conf_threshold: float = DEFAULT_POSE_CONF_THRESHOLD
-):
+async def analyze_video(request: AnalyzeVideoRequest):
     """
     동영상 분석 + HLS 변환 + Spring Boot API 호출
 
     Args:
-        video_path: 분석할 동영상 파일 경로
-        cctv_id: CCTV ID
-        location_id: 위치 ID
-        spring_boot_url: Spring Boot 서버 URL
-        output_stream_dir: HLS 출력 디렉토리
-        conf_threshold: 객체 탐지 신뢰도 임계값
-        pose_conf_threshold: 자세 분류 신뢰도 임계값
+        request: 동영상 분석 요청 (JSON body)
     """
     import subprocess
     import requests
@@ -528,8 +552,15 @@ async def analyze_video(
     # 백그라운드에서 비동기로 분석 실행
     def run_analysis_in_background():
         try:
-            analyze_video_sync(video_path, cctv_id, location_id, spring_boot_url,
-                             output_stream_dir, conf_threshold, pose_conf_threshold)
+            analyze_video_sync(
+                request.video_path,
+                request.cctv_id,
+                request.location_id,
+                request.spring_boot_url,
+                request.output_stream_dir,
+                request.conf_threshold,
+                request.pose_conf_threshold
+            )
         except Exception as e:
             print(f"Background analysis error: {str(e)}")
             print(traceback.format_exc())
@@ -543,9 +574,9 @@ async def analyze_video(
     return JSONResponse(content={
         "status": "processing",
         "message": "Video analysis started in background",
-        "cctv_id": cctv_id,
-        "location_id": location_id,
-        "video_path": video_path
+        "cctv_id": request.cctv_id,
+        "location_id": request.location_id,
+        "video_path": request.video_path
     })
 
 def analyze_video_sync(
@@ -632,8 +663,8 @@ def analyze_video_sync(
             cap.release()
             return JSONResponse(status_code=500, content={"error": error_msg})
 
-        # 영상 리사이즈 설정 (객체 탐지 품질 향상을 위해 720p로 설정)
-        max_height = 720
+        # 영상 리사이즈 설정 (실시간 처리 속도 향상을 위해 480p로 설정)
+        max_height = 480
         resize_needed = frame_height > max_height
         if resize_needed:
             resize_scale = max_height / frame_height
@@ -650,6 +681,8 @@ def analyze_video_sync(
         new_height = new_height if new_height % 2 == 0 else new_height - 1
 
         # FFmpeg 프로세스 시작 (라이브 HLS 스트리밍 모드)
+        # 실시간 스트리밍 최적화 설정
+        target_fps = min(fps, 15)  # 최대 15fps로 제한 (처리 부하 대폭 감소)
         ffmpeg_cmd = [
             "ffmpeg",       # 마찬가지로 로컬에서 테스트시 경로 "/opt/homebrew/bin/ffmpeg"로 변경
             "-y",  # 덮어쓰기
@@ -657,16 +690,27 @@ def analyze_video_sync(
             "-vcodec", "rawvideo",
             "-pix_fmt", "bgr24",  # OpenCV 기본 포맷
             "-s", f"{new_width}x{new_height}",  # 해상도
-            "-r", str(fps),  # 프레임레이트
+            "-r", str(target_fps),  # 프레임레이트 (30fps로 제한)
             "-i", "-",  # stdin에서 입력 받음
             "-c:v", "libx264",  # H.264 인코딩
             "-preset", "ultrafast",  # 가장 빠른 인코딩 (실시간용)
             "-tune", "zerolatency",  # 저지연 튜닝
-            "-crf", "28",  # 품질
-            "-g", str(fps * 2),  # GOP 크기 (2초)
-            "-hls_time", "2",  # 2초 세그먼트
-            "-hls_list_size", "0",  # 모든 세그먼트 유지 (라이브 모드)
-            "-hls_flags", "append_list+omit_endlist",  # ENDLIST 태그 생략 (라이브 모드)
+            "-crf", "23",  # 품질 향상 (28 → 23, 낮을수록 고품질)
+            "-maxrate", "2M",  # 최대 비트레이트 2Mbps (대역폭 제한)
+            "-bufsize", "4M",  # 버퍼 크기
+            "-g", str(target_fps),  # GOP 크기 (1초마다 키프레임, 화면 깨짐 방지)
+            "-keyint_min", str(target_fps),  # 최소 키프레임 간격
+            "-sc_threshold", "0",  # 씬 체인지 감지 비활성화 (일정한 키프레임)
+            "-force_key_frames", f"expr:gte(t,n_forced*1)",  # 1초마다 강제 키프레임
+            # ========== 실시간 flush 옵션 (playlist 즉시 갱신) ==========
+            "-fflags", "+flush_packets+genpts",  # 패킷 즉시 flush + 타임스탬프 생성
+            "-flush_packets", "1",  # 패킷을 즉시 디스크에 쓰기
+            # ========== HLS 최적화 ==========
+            "-hls_time", "1",  # 1초 세그먼트 (지연 감소)
+            "-hls_list_size", "0",  # 모든 세그먼트 유지 (로컬 비디오용)
+            "-hls_flags", "append_list+omit_endlist+independent_segments",  # 실시간 갱신
+            "-hls_segment_type", "mpegts",  # MPEG-TS 명시
+            "-start_number", "0",  # 세그먼트 번호 0부터 시작
             "-hls_segment_filename", os.path.join(stream_output_dir_path, "segment_%03d.ts"),
             hls_output
         ]
@@ -676,12 +720,18 @@ def analyze_video_sync(
             ffmpeg_cmd,
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=10**8
+            bufsize=0  # 버퍼 비활성화 (즉시 전송)
         )
         print(f"FFmpeg process started (PID: {ffmpeg_process.pid})")
 
         frame_count = 0
         analysis_interval = fps * 1  # 1초마다 분석
+
+        # ========== 프레임 스킵 설정 (실시간 처리 속도 향상) ==========
+        # 모든 프레임을 FFmpeg로 보내지 않고, 일부만 전송하여 처리 부하 감소
+        frame_skip = 4  # 매 4프레임마다 하나만 전송 (처리량 대폭 감소)
+        # frame_skip = 1일 경우 모든 프레임 전송, 4일 경우 1/4만 전송
+        print(f"Frame skip: {frame_skip} (output FPS: ~{target_fps // frame_skip})")
 
         analyzed_frames = []
 
@@ -692,6 +742,7 @@ def analyze_video_sync(
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
+                print(f"\n=== Video file ended (total {frame_count} frames) ===")
                 break
 
             # 프레임 리사이즈
@@ -731,23 +782,23 @@ def analyze_video_sync(
 
                         final_detections.append(det)
 
-                    # Spring Boot에 맞게 detections 필드명 변환
+                    # Spring Boot에 맞게 detections 필드명 변환 (numpy 타입도 변환)
                     formatted_detections = []
                     for det in final_detections:
                         formatted_det = {
                             "className": det.get("class"),
-                            "confidence": det.get("confidence"),
-                            "box": det.get("box"),
+                            "confidence": float(det.get("confidence")) if det.get("confidence") is not None else None,
+                            "box": convert_to_serializable(det.get("box")),
                             "pose": det.get("pose"),
-                            "poseScore": det.get("pose_score")
+                            "poseScore": float(det.get("pose_score")) if det.get("pose_score") is not None else None
                         }
                         formatted_detections.append(formatted_det)
 
                     formatted_summary = {
-                        "fireCount": yolo_result.get("summary", {}).get("fire_count", 0),
-                        "humanCount": yolo_result.get("summary", {}).get("human_count", 0),
-                        "smokeCount": yolo_result.get("summary", {}).get("smoke_count", 0),
-                        "totalObjects": yolo_result.get("summary", {}).get("total_objects", 0)
+                        "fireCount": int(yolo_result.get("summary", {}).get("fire_count", 0)),
+                        "humanCount": int(yolo_result.get("summary", {}).get("human_count", 0)),
+                        "smokeCount": int(yolo_result.get("summary", {}).get("smoke_count", 0)),
+                        "totalObjects": int(yolo_result.get("summary", {}).get("total_objects", 0))
                     }
 
                     # Spring Boot API 호출
@@ -790,21 +841,25 @@ def analyze_video_sync(
                     # 바운딩 박스가 그려진 프레임 저장
                     last_detections = final_detections
 
-            # 모든 프레임에 바운딩 박스 그리기 (마지막 분석 결과 사용)
-            if last_detections:
-                annotated_frame = draw_pose_predictions(frame, last_detections)
-            else:
-                annotated_frame = frame.copy()
+            # ========== 프레임 스킵 적용: 매 N프레임마다만 FFmpeg로 전송 ==========
+            if frame_count % frame_skip == 0:
+                # 바운딩 박스 그리기 (마지막 분석 결과 사용)
+                if last_detections:
+                    annotated_frame = draw_pose_predictions(frame, last_detections)
+                else:
+                    annotated_frame = frame.copy()
 
-            # FFmpeg로 프레임 전송 (실시간 HLS 생성)
-            try:
-                ffmpeg_process.stdin.write(annotated_frame.tobytes())
-            except BrokenPipeError:
-                print("FFmpeg pipe broken, stopping...")
-                break
+                # FFmpeg로 프레임 전송 (실시간 HLS 생성)
+                try:
+                    ffmpeg_process.stdin.write(annotated_frame.tobytes())
+                except BrokenPipeError:
+                    print("FFmpeg pipe broken, stopping...")
+                    break
 
-            # 메모리 해제
-            del annotated_frame
+                # 메모리 해제
+                del annotated_frame
+
+            # 프레임 메모리 해제
             del frame
 
             frame_count += 1
@@ -822,10 +877,15 @@ def analyze_video_sync(
             ffmpeg_process.wait(timeout=30)
             print(f"FFmpeg process finished")
 
-        # 라이브 HLS 모드: #EXT-X-ENDLIST를 추가하지 않음
-        # 프론트엔드 HLS.js가 라이브 모드로 계속 동작하며,
-        # 새 세그먼트가 없으면 자연스럽게 버퍼링/대기 상태가 됨
-        print(f"Live HLS mode: #EXT-X-ENDLIST not added (stream stays live)")
+        # 로컬 동영상 파일이므로 HLS playlist에 #EXT-X-ENDLIST 추가
+        # 이를 통해 HLS 플레이어가 스트림이 완료되었음을 인식
+        print(f"Adding #EXT-X-ENDLIST to playlist for local video file...")
+        try:
+            with open(hls_output, 'a') as playlist_file:
+                playlist_file.write("#EXT-X-ENDLIST\n")
+            print(f"Successfully added #EXT-X-ENDLIST to {hls_output}")
+        except Exception as e:
+            print(f"WARNING: Failed to add #EXT-X-ENDLIST: {str(e)}")
 
     except Exception as e:
         error_msg = f"Video analysis failed: {str(e)}"
@@ -922,8 +982,8 @@ def analyze_live_stream_sync(
         frame_height, frame_width = first_frame.shape[:2]
         print(f"Actual frame size: {frame_width}x{frame_height}")
 
-        # 프레임 리사이즈 설정 (객체 탐지 품질 향상을 위해 720p로 설정)
-        max_height = 720
+        # 프레임 리사이즈 설정 (실시간 처리 속도 향상을 위해 480p로 설정)
+        max_height = 480
         if frame_height > max_height:
             resize_scale = max_height / frame_height
             new_width = int(frame_width * resize_scale)
@@ -940,6 +1000,8 @@ def analyze_live_stream_sync(
         new_height = new_height if new_height % 2 == 0 else new_height - 1
 
         # FFmpeg 프로세스 시작 (라이브 HLS 스트리밍)
+        # 실시간 스트리밍 최적화 설정
+        target_fps = min(fps, 15)  # 최대 15fps로 제한 (처리 부하 대폭 감소)
         ffmpeg_cmd = [
             "ffmpeg", # 원래 "ffmpeg, 로컬에서만 "/opt/homebrew/bin/ffmpeg"로 사용
             "-y",
@@ -947,16 +1009,27 @@ def analyze_live_stream_sync(
             "-vcodec", "rawvideo",
             "-pix_fmt", "bgr24",
             "-s", f"{new_width}x{new_height}",
-            "-r", str(fps),
+            "-r", str(target_fps),  # 프레임레이트 (30fps로 제한)
             "-i", "-",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
-            "-crf", "28",
-            "-g", str(fps * 2),
-            "-hls_time", "2",
+            "-crf", "23",  # 품질 향상 (28 → 23, 낮을수록 고품질)
+            "-maxrate", "2M",  # 최대 비트레이트 2Mbps (대역폭 제한)
+            "-bufsize", "4M",  # 버퍼 크기
+            "-g", str(target_fps // 2),  # GOP 크기 (0.5초마다 키프레임, 세그먼트 길이에 맞춤)
+            "-keyint_min", str(target_fps // 2),  # 최소 키프레임 간격
+            "-sc_threshold", "0",  # 씬 체인지 감지 비활성화 (일정한 키프레임)
+            "-force_key_frames", f"expr:gte(t,n_forced*0.5)",  # 0.5초마다 강제 키프레임
+            # ========== 실시간 flush 옵션 (playlist 즉시 갱신) ==========
+            "-fflags", "+flush_packets+genpts",  # 패킷 즉시 flush + 타임스탬프 생성
+            "-flush_packets", "1",  # 패킷을 즉시 디스크에 쓰기
+            # ========== HLS 최적화 (라이브 스트리밍용 - 초저지연) ==========
+            "-hls_time", "0.5",  # 0.5초 세그먼트 (초저지연)
             "-hls_list_size", "10",  # 최근 10개 세그먼트만 유지
-            "-hls_flags", "delete_segments+append_list+omit_endlist",
+            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",  # 실시간 갱신
+            "-hls_segment_type", "mpegts",  # MPEG-TS 명시
+            "-start_number", "0",  # 세그먼트 번호 0부터 시작
             "-hls_segment_filename", os.path.join(stream_output_dir_path, "segment_%03d.ts"),
             hls_output
         ]
@@ -966,7 +1039,7 @@ def analyze_live_stream_sync(
             ffmpeg_cmd,
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=10**8
+            bufsize=0  # 버퍼 비활성화 (즉시 전송)
         )
         print(f"FFmpeg started (PID: {ffmpeg_process.pid})")
 
@@ -974,24 +1047,48 @@ def analyze_live_stream_sync(
         analysis_interval = fps * 1  # 1초마다 AI 분석
         last_detections = []
 
+        # ========== 실시간 처리: 모든 프레임 전송, AI는 간헐적 실행 ==========
+        # frame_skip 제거: FFmpeg가 자동으로 fps 조절 (실시간 속도 유지)
+        print(f"Real-time streaming enabled: All frames sent to FFmpeg, AI analysis every {analysis_interval} frames")
+
         # 첫 프레임 처리
         frame = first_frame
         if resize_needed:
             frame = cv2.resize(frame, (new_width, new_height))
 
+        # 연속 에러 카운터 (재연결 판단용)
+        consecutive_errors = 0
+        max_consecutive_errors = 10  # 10번 연속 에러 시 재연결
+
         while not stop_event.is_set():
             # 프레임 읽기
             if frame_count > 0:  # 첫 프레임은 이미 읽음
                 ret, frame = cap.read()
-                if not ret:
-                    print("Stream ended or connection lost, attempting reconnect...")
-                    # 재연결 시도
-                    cap.release()
-                    cap = cv2.VideoCapture(rtsp_url)
-                    if not cap.isOpened():
-                        print("ERROR: Reconnection failed")
-                        break
+
+                # ========== 프레임 읽기 실패 또는 손상된 프레임 처리 ==========
+                if not ret or frame is None:
+                    consecutive_errors += 1
+                    print(f"[CCTV {cctv_id}] Frame read error (consecutive: {consecutive_errors})")
+
+                    # 연속 에러가 많으면 재연결
+                    if consecutive_errors >= max_consecutive_errors:
+                        print(f"[CCTV {cctv_id}] Too many errors, attempting reconnect...")
+                        cap.release()
+                        cap = cv2.VideoCapture(rtsp_url)
+                        if not cap.isOpened():
+                            print(f"[CCTV {cctv_id}] ERROR: Reconnection failed")
+                            break
+                        consecutive_errors = 0
                     continue
+
+                # 프레임 검증 (shape 확인)
+                if frame.shape[0] == 0 or frame.shape[1] == 0:
+                    print(f"[CCTV {cctv_id}] Invalid frame shape: {frame.shape}")
+                    consecutive_errors += 1
+                    continue
+
+                # 정상 프레임이면 에러 카운터 리셋
+                consecutive_errors = 0
 
                 if resize_needed:
                     frame = cv2.resize(frame, (new_width, new_height))
@@ -1032,23 +1129,23 @@ def analyze_live_stream_sync(
 
                         final_detections.append(det)
 
-                    # Spring Boot API 호출
+                    # Spring Boot API 호출 (numpy 타입도 변환)
                     formatted_detections = []
                     for det in final_detections:
                         formatted_det = {
                             "className": det.get("class"),
-                            "confidence": det.get("confidence"),
-                            "box": det.get("box"),
+                            "confidence": float(det.get("confidence")) if det.get("confidence") is not None else None,
+                            "box": convert_to_serializable(det.get("box")),
                             "pose": det.get("pose"),
-                            "poseScore": det.get("pose_score")
+                            "poseScore": float(det.get("pose_score")) if det.get("pose_score") is not None else None
                         }
                         formatted_detections.append(formatted_det)
 
                     formatted_summary = {
-                        "fireCount": yolo_result.get("summary", {}).get("fire_count", 0),
-                        "humanCount": yolo_result.get("summary", {}).get("human_count", 0),
-                        "smokeCount": yolo_result.get("summary", {}).get("smoke_count", 0),
-                        "totalObjects": yolo_result.get("summary", {}).get("total_objects", 0)
+                        "fireCount": int(yolo_result.get("summary", {}).get("fire_count", 0)),
+                        "humanCount": int(yolo_result.get("summary", {}).get("human_count", 0)),
+                        "smokeCount": int(yolo_result.get("summary", {}).get("smoke_count", 0)),
+                        "totalObjects": int(yolo_result.get("summary", {}).get("total_objects", 0))
                     }
 
                     try:
@@ -1079,7 +1176,8 @@ def analyze_live_stream_sync(
 
                     last_detections = final_detections
 
-            # 바운딩 박스 그리기
+            # ========== 모든 프레임을 FFmpeg로 전송 (실시간 속도 유지) ==========
+            # 바운딩 박스 그리기 (마지막 AI 분석 결과 사용)
             if last_detections:
                 annotated_frame = draw_pose_predictions(frame, last_detections)
             else:

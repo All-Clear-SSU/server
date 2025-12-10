@@ -48,4 +48,12 @@ public interface SurvivorRepository extends JpaRepository<Survivor, Long> {
             Location location,
             LocalDateTime timeThreshold
     );
+
+    /**
+     * [추가] 활성 상태인 생존자 목록을 조회함
+     * 웹 대시보드에서 현재 구조 대기 중인 생존자만 표시하는 데 사용함
+     *
+     * @return 활성 생존자 목록 (isActive = true)
+     */
+    List<Survivor> findByIsActiveTrue();
 }

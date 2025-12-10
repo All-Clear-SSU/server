@@ -1,5 +1,6 @@
 package opensource.project.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import opensource.project.domain.*;
@@ -104,6 +105,11 @@ public class DetectionServiceImpl implements DetectionService {
     // 특정 생존자의 가장 최신 Detection 조회
     @Override
     public DetectionResponseDto getLatestDetectionBySurvivor(Long survivorId) {
+        return getLatestDetectionBySurvivor(survivorId, null);
+    }
+
+    // 특정 생존자의 가장 최신 Detection 조회 (format 지원)
+    public DetectionResponseDto getLatestDetectionBySurvivor(Long survivorId, String format) {
         // 생존자 확인
         if (!survivorRepository.existsById(survivorId)) {
             throw new IllegalArgumentException("Survivor not found with id: " + survivorId);
@@ -114,7 +120,19 @@ public class DetectionServiceImpl implements DetectionService {
             throw new IllegalArgumentException("No detection found for survivor with id: " + survivorId);
         }
 
-        return DetectionResponseDto.from(detections.get(0));
+        Detection latestDetection = detections.get(0);
+        DetectionResponseDto response = DetectionResponseDto.from(latestDetection);
+
+        // format=summary인 경우 aiAnalysisResult를 한글 요약으로 변환
+        if ("summary".equals(format)) {
+            String situationSummary = convertToSituationSummary(
+                    latestDetection.getAiAnalysisResult(),
+                    latestDetection
+            );
+            response.setAiAnalysisResult(situationSummary);
+        }
+
+        return response;
     }
 
 
@@ -181,6 +199,11 @@ public class DetectionServiceImpl implements DetectionService {
     // 특정 생존자의 종합 분석 정보 조회(Survivor, Detection, PriorityAssessment를 통합하여 반환)
     @Override
     public SurvivorAnalysisDto getSurvivorAnalysis(Long survivorId) {
+        return getSurvivorAnalysis(survivorId, null);
+    }
+
+    // 특정 생존자의 종합 분석 정보 조회 (format 지원)
+    public SurvivorAnalysisDto getSurvivorAnalysis(Long survivorId, String format) {
         // 생존자 조회
         Survivor survivor = survivorRepository.findById(survivorId)
                 .orElseThrow(() -> new IllegalArgumentException("Survivor not found with id: " + survivorId));
@@ -194,7 +217,18 @@ public class DetectionServiceImpl implements DetectionService {
                 .findFirstBySurvivor_IdOrderByAssessedAtDesc(survivorId)
                 .orElse(null);
 
-        return SurvivorAnalysisDto.from(survivor, latestDetection, assessment);
+        SurvivorAnalysisDto analysisDto = SurvivorAnalysisDto.from(survivor, latestDetection, assessment);
+
+        // format=summary인 경우 aiAnalysisResult를 한글 요약으로 변환
+        if ("summary".equals(format) && latestDetection != null && analysisDto.getAiAnalysisResult() != null) {
+            String situationSummary = convertToSituationSummary(
+                    latestDetection.getAiAnalysisResult(),
+                    latestDetection
+            );
+            analysisDto.setAiAnalysisResult(situationSummary);
+        }
+
+        return analysisDto;
     }
 
     // Object_Detection 모델을 호출 -> Object Detection 수행 -> Detection과 PriorityAssessment에 저장(더미)하고 결과 반환
@@ -297,6 +331,122 @@ public class DetectionServiceImpl implements DetectionService {
                                           String videoUrl) {
         // AI 탐지 결과 처리를 전담 서비스로 위임
         aiDetectionProcessorService.processAIDetectionResult(aiResult, cctvId, locationId, videoUrl);
+    }
+
+    /**
+     * AI 분석 결과 JSON을 한글 상황 요약으로 변환
+     * DB에 저장된 JSON은 그대로 유지하고, API 응답용으로만 변환
+     */
+    public String convertToSituationSummary(String aiAnalysisJson, Detection detection) {
+        // JSON이 아니거나 null인 경우 원본 그대로 반환
+        if (aiAnalysisJson == null || !aiAnalysisJson.trim().startsWith("{")) {
+            return aiAnalysisJson;
+        }
+
+        try {
+            // WiFi Detection인 경우 다르게 처리
+            if (detection.getDetectionType() == DetectionType.WIFI) {
+                return generateWifiSituationMessage(aiAnalysisJson, detection);
+            }
+
+            // CCTV Detection 처리 (기존 로직)
+            ObjectMapper mapper = new ObjectMapper();
+            AIDetectionResultDto.DetectionObject detectionObject =
+                    mapper.readValue(aiAnalysisJson, AIDetectionResultDto.DetectionObject.class);
+
+            String pose = detectionObject.getPose();
+
+            // Detection 엔티티에서 fire/smoke count 가져오기
+            Integer fireCount = detection.getFireCount() != null ? detection.getFireCount() : 0;
+            Integer smokeCount = detection.getSmokeCount() != null ? detection.getSmokeCount() : 0;
+
+            return generateSituationMessage(pose, fireCount, smokeCount);
+
+        } catch (Exception e) {
+            log.warn("Failed to parse AI analysis result to situation summary", e);
+            return aiAnalysisJson; // 파싱 실패 시 원본 반환
+        }
+    }
+
+    /**
+     * WiFi Detection용 상황 요약 메시지 생성
+     */
+    private String generateWifiSituationMessage(String aiAnalysisJson, Detection detection) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            WifiAnalysisDataDto wifiAnalysis = mapper.readValue(aiAnalysisJson, WifiAnalysisDataDto.class);
+
+            StringBuilder message = new StringBuilder("WiFi 센서 탐지");
+
+            // 움직임 감지
+            if (Boolean.TRUE.equals(wifiAnalysis.getMovementDetected())) {
+                message.append(" - 움직임 감지");
+                if (wifiAnalysis.getMovementIntensity() != null) {
+                    double intensity = wifiAnalysis.getMovementIntensity();
+                    if (intensity > 0.7) {
+                        message.append(" (강함)");
+                    } else if (intensity > 0.3) {
+                        message.append(" (보통)");
+                    } else {
+                        message.append(" (약함)");
+                    }
+                }
+            }
+
+            // 호흡 감지
+            if (Boolean.TRUE.equals(wifiAnalysis.getBreathingDetected())) {
+                message.append(" - 호흡 감지");
+                if (wifiAnalysis.getBreathingRate() != null) {
+                    message.append(String.format(" (%.1f BPM)", wifiAnalysis.getBreathingRate()));
+                }
+            }
+
+            // 신호 강도
+            if (detection.getSignalStrength() != null) {
+                message.append(String.format(" - 신호 강도: %d dBm", detection.getSignalStrength()));
+            }
+
+            return message.toString();
+        } catch (Exception e) {
+            log.warn("Failed to parse WiFi analysis data", e);
+            return "WiFi 센서 탐지";
+        }
+    }
+
+    /**
+     * pose, fire_count, smoke_count를 조합하여 한글 상황 설명 생성
+     */
+    private String generateSituationMessage(String pose, int fireCount, int smokeCount) {
+        StringBuilder message = new StringBuilder();
+
+        // 1. 주변 환경 상황
+        if (fireCount > 0 && smokeCount > 0) {
+            message.append("주변 화염 및 연기 감지");
+        } else if (fireCount > 0) {
+            message.append("주변 화염 감지");
+        } else if (smokeCount > 0) {
+            message.append("주변 연기 감지");
+        }
+
+        // 구분자 추가
+        if (message.length() > 0) {
+            message.append(", ");
+        }
+
+        // 2. 생존자 자세 상태
+        if (pose == null) {
+            message.append("생존자 발견");
+        } else {
+            switch (pose.toLowerCase()) {
+                case "falling", "fallen" -> message.append("생존자 쓰러져 있음");
+                case "crawling" -> message.append("생존자 기어가는 중");
+                case "sitting" -> message.append("생존자 앉아 있음");
+                case "standing" -> message.append("생존자 서 있음");
+                default -> message.append("생존자 발견");
+            }
+        }
+
+        return message.toString();
     }
 
 }

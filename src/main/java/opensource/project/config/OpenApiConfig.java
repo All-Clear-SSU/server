@@ -89,7 +89,7 @@ public class OpenApiConfig {
     }
 
     @Bean
-    public GroupedOpenApi websockettestApi(){
+    public GroupedOpenApi websockettestApi() {
         return GroupedOpenApi.builder()
                 .group("8. WebSocketTest API")
                 .pathsToMatch("/websocket/test/**")
@@ -97,10 +97,26 @@ public class OpenApiConfig {
     }
 
     @Bean
-    public GroupedOpenApi liveStreamApi(){
+    public GroupedOpenApi videoAnalysisApi() {
         return GroupedOpenApi.builder()
-                .group("9. Live-Stream API")
-                .pathsToMatch("/live-stream/**")
+                .group("9. Video-Analysis API")
+                .pathsToMatch("/video-analysis/**")
+                .build();
+    }
+
+        @Bean
+        public GroupedOpenApi liveStreamApi() {
+            return GroupedOpenApi.builder()
+                    .group("10. Live-Stream API")
+                    .pathsToMatch("/live-stream/**")
+                    .build();
+        }
+
+    @Bean
+    public GroupedOpenApi wifiSensorTestApi() {
+        return GroupedOpenApi.builder()
+                .group("11. WiFi-Sensor Test API")
+                .pathsToMatch("/test/wifi-sensor/**")
                 .build();
     }
 }

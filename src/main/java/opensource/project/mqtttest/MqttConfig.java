@@ -18,6 +18,8 @@ import org.springframework.integration.mqtt.inbound.MqttPahoMessageDrivenChannel
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
 
+import jakarta.annotation.PostConstruct;
+
 /**
  * MQTT 브로커와의 연결 및 메시지 구독을 설정하는 클래스
  * application.yml의 mqtt.enabled=true로 설정하면 활성화됨
@@ -43,12 +45,38 @@ public class MqttConfig {
     // [추가] MQTT 메시지를 처리할 서비스를 주입받음
     private final WifiDetectionMqttService wifiDetectionMqttService;
 
+    // ========================================
+    // 🧪 테스트 모드: 하드코딩된 값 사용
+    // ========================================
+
+//    /**
+//     * MQTT 브로커 URL (테스트용 로컬 Mosquitto)
+//     */
+//    private String BROKER_URL = "tcp://localhost:1883";
+//
+//    /**
+//     * MQTT 클라이언트 ID (Spring Boot 애플리케이션 식별자)
+//     */
+//    private String CLIENT_ID = "spring-boot-client-test-" + System.currentTimeMillis();
+//
+//    /**
+//     * 구독할 MQTT 토픽 (ESP32 센서가 발행하는 토픽)
+//     * PROTO/ESP/# : 모든 센서 ID를 와일드카드로 구독
+//     */
+//    private String TOPIC = "PROTO/ESP/#";
+
+    // ========================================
+    // 🔥 프로덕션 모드: 환경변수로 주입 (기존 코드)
+    // 테스트 완료 후 아래 주석을 해제하고 위 코드를 삭제하세요
+    // ========================================
+     
     /**
      * MQTT 브로커 URL
      * 환경변수로 주입됨 (예: tcp://mqtt-broker.example.com:1883)
      */
     @Value("${MQTT_BROKER_URL}")
     private String BROKER_URL;
+
 
     /**
      * MQTT 클라이언트 ID
@@ -58,6 +86,7 @@ public class MqttConfig {
     @Value("${MQTT_CLIENT_ID}")
     private String CLIENT_ID;
 
+
     /**
      * 구독할 MQTT 토픽
      * ESP32 센서가 메시지를 발행하는 토픽을 지정함
@@ -65,6 +94,23 @@ public class MqttConfig {
      */
     @Value("${MQTT_TOPIC}")
     private String TOPIC;
+
+    /**
+     * Bean 초기화 완료 시 MQTT 설정 정보를 로그로 출력
+     */
+    @PostConstruct
+    public void init() {
+        log.info("=".repeat(60));
+        log.info("🔌 MQTT 설정 활성화");
+        log.info("=".repeat(60));
+        log.info("📍 MQTT 브로커 URL: {}", BROKER_URL);
+        log.info("🆔 MQTT 클라이언트 ID: {}", CLIENT_ID);
+        log.info("📢 구독 토픽: {}", TOPIC);
+        log.info("=".repeat(60));
+        log.info("✅ MQTT 브로커 연결 준비 완료");
+        log.info("📡 ESP32 센서로부터 WiFi CSI 데이터 수신 대기 중...");
+        log.info("=".repeat(61));
+    }
 
     /**
      * MQTT 클라이언트 팩토리를 생성함
@@ -138,11 +184,11 @@ public class MqttConfig {
                 // [변경] JSON 문자열을 MqttWifiDetectionDto 객체로 파싱함
                 MqttWifiDetectionDto mqttData = objectMapper.readValue(payload, MqttWifiDetectionDto.class);
 
-                // 센서 ID와 생존자 탐지 여부를 로그에 기록함
-                log.info("센서 ID: {}, 생존자 탐지: {}, 신호 강도: {} dBm",
+                // 센서 ID (DB Primary Key)와 생존자 탐지 여부를 로그에 기록함
+                log.info("센서 ID (DB): {}, 생존자 탐지: {}, CSI 데이터 크기: {}",
                         mqttData.getSensorId(),
                         mqttData.getSurvivorDetected(),
-                        mqttData.getSignalStrength());
+                        mqttData.getCsiAmplitudeSummary() != null ? mqttData.getCsiAmplitudeSummary().size() : 0);
 
                 // [변경] WifiDetectionMqttService를 호출하여 비즈니스 로직을 처리함
                 // 이 서비스에서 다음 작업을 수행함:

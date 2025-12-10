@@ -11,6 +11,7 @@ import opensource.project.dto.DetectionResponseDto;
 import opensource.project.dto.ImageAnalysisResponseDto;
 import opensource.project.dto.SurvivorAnalysisDto;
 import opensource.project.service.DetectionService;
+import opensource.project.service.DetectionServiceImpl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -45,8 +46,20 @@ public class DetectionController {
 
     // 특정 생존자의 가장 최신 Detection 조회
     @GetMapping("/survivor/{survivorId}/latest")
-    public ResponseEntity<DetectionResponseDto> getLatestDetectionBySurvivor(@PathVariable Long survivorId) {
-        DetectionResponseDto response = detectionService.getLatestDetectionBySurvivor(survivorId);
+    public ResponseEntity<DetectionResponseDto> getLatestDetectionBySurvivor(
+            @PathVariable Long survivorId,
+            @RequestParam(required = false) String format) {
+
+        DetectionResponseDto response;
+
+        if ("json".equals(format)) {
+            // format=json: JSON 원본 그대로 반환 (개발/디버깅용)
+            response = detectionService.getLatestDetectionBySurvivor(survivorId);
+        } else {
+            // 기본: 한글 상황 요약으로 반환
+            response = ((DetectionServiceImpl) detectionService).getLatestDetectionBySurvivor(survivorId, "summary");
+        }
+
         return ResponseEntity.ok(response);
     }
 
@@ -73,12 +86,24 @@ public class DetectionController {
      * - fullAddress: 위치
      * - currentStatus: 생존자 현재 상태
      * - detectionMethod: 탐지 수단
-     *  - confidenceCoefficient: 신뢰도 계수
+     * - confidenceCoefficient: 신뢰도 계수
      * - statusScore, environmentScore, finalRiskScore: 위험도 점수 관련
      */
     @GetMapping("/survivor/{survivorId}/analysis")
-    public ResponseEntity<SurvivorAnalysisDto> getSurvivorAnalysis(@PathVariable Long survivorId) {
-        SurvivorAnalysisDto response = detectionService.getSurvivorAnalysis(survivorId);
+    public ResponseEntity<SurvivorAnalysisDto> getSurvivorAnalysis(
+            @PathVariable Long survivorId,
+            @RequestParam(required = false) String format) {
+
+        SurvivorAnalysisDto response;
+
+        if ("json".equals(format)) {
+            // format=json: JSON 원본 그대로 반환 (개발/디버깅용)
+            response = detectionService.getSurvivorAnalysis(survivorId);
+        } else {
+            // 기본: 한글 상황 요약으로 반환
+            response = ((DetectionServiceImpl) detectionService).getSurvivorAnalysis(survivorId, "summary");
+        }
+
         return ResponseEntity.ok(response);
     }
 

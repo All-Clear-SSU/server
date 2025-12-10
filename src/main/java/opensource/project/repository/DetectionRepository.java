@@ -4,9 +4,12 @@ import opensource.project.domain.Detection;
 import opensource.project.domain.enums.DetectionType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface DetectionRepository extends JpaRepository<Detection, Long> {
@@ -43,4 +46,20 @@ public interface DetectionRepository extends JpaRepository<Detection, Long> {
             DetectionType detectionType,
             Pageable pageable
     );
+
+    /**
+     * [추가] Detection을 모든 관계와 함께 조회하는 메서드
+     * 비동기 스레드에서 LazyInitializationException을 방지하기 위해 사용
+     *
+     * @param id Detection ID
+     * @return 모든 관계가 로드된 Detection Optional
+     */
+    @Query("SELECT d FROM Detection d " +
+           "LEFT JOIN FETCH d.survivor " +
+           "LEFT JOIN FETCH d.wifiSensor w " +
+           "LEFT JOIN FETCH w.location " +
+           "LEFT JOIN FETCH d.cctv " +
+           "LEFT JOIN FETCH d.location " +
+           "WHERE d.id = :id")
+    Optional<Detection> findByIdWithRelations(@Param("id") Long id);
 }
