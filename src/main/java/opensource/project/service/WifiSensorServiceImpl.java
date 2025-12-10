@@ -47,9 +47,28 @@ public class WifiSensorServiceImpl implements WifiSensorService {
         return WifiSensorResponseDto.from(savedSensor);
     }
 
+    /**
+     * [수정] WiFi 센서 목록을 조회함
+     * active 파라미터가 null이면 전체 센서를 조회하고,
+     * true/false이면 해당 상태의 센서만 조회함
+     *
+     * @param active 활성 상태 필터 (null: 전체, true: 활성, false: 비활성)
+     * @return WiFi 센서 목록
+     */
     @Override
-    public List<WifiSensorResponseDto> getAllWifiSensors() {
-        return wifiSensorRepository.findAll().stream()
+    public List<WifiSensorResponseDto> getAllWifiSensors(Boolean active) {
+        List<WifiSensor> sensors;
+
+        // active 파라미터가 null이면 전체 센서를 조회함
+        if (active == null) {
+            sensors = wifiSensorRepository.findAll();
+        } else {
+            // active 값에 따라 필터링하여 조회함
+            sensors = wifiSensorRepository.findByIsActive(active);
+        }
+
+        // WifiSensor 엔티티를 WifiSensorResponseDto로 변환하여 반환함
+        return sensors.stream()
                 .map(WifiSensorResponseDto::from)
                 .collect(Collectors.toList());
     }
