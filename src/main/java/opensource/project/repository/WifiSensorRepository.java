@@ -38,4 +38,23 @@ public interface WifiSensorRepository extends JpaRepository<WifiSensor, Long> {
      */
     @Query("SELECT s FROM WifiSensor s LEFT JOIN FETCH s.location WHERE s.id = :id")
     Optional<WifiSensor> findByIdWithLocation(@Param("id") Long id);
+
+    /**
+     * [추가] 모든 WiFi 센서를 Location과 함께 조회함
+     * LazyInitializationException을 방지하기 위해 사용
+     *
+     * @return Location과 함께 조회된 모든 WifiSensor 목록
+     */
+    @Query("SELECT s FROM WifiSensor s LEFT JOIN FETCH s.location")
+    List<WifiSensor> findAllWithLocation();
+
+    /**
+     * [추가] 활성 상태별 WiFi 센서를 Location과 함께 조회함
+     * LazyInitializationException을 방지하기 위해 사용
+     *
+     * @param isActive 활성 상태 (true: 활성, false: 비활성)
+     * @return Location과 함께 조회된 WifiSensor 목록
+     */
+    @Query("SELECT s FROM WifiSensor s LEFT JOIN FETCH s.location WHERE s.isActive = :isActive")
+    List<WifiSensor> findByIsActiveWithLocation(@Param("isActive") Boolean isActive);
 }

@@ -49,6 +49,7 @@ public class WifiSensorServiceImpl implements WifiSensorService {
      * [수정] WiFi 센서 목록을 조회함
      * active 파라미터가 null이면 전체 센서를 조회하고,
      * true/false이면 해당 상태의 센서만 조회함
+     * ✅ Location과 함께 조회하여 LazyInitializationException 방지
      *
      * @param active 활성 상태 필터 (null: 전체, true: 활성, false: 비활성)
      * @return WiFi 센서 목록
@@ -57,12 +58,12 @@ public class WifiSensorServiceImpl implements WifiSensorService {
     public List<WifiSensorResponseDto> getAllWifiSensors(Boolean active) {
         List<WifiSensor> sensors;
 
-        // active 파라미터가 null이면 전체 센서를 조회함
+        // ✅ active 파라미터가 null이면 전체 센서를 Location과 함께 조회함
         if (active == null) {
-            sensors = wifiSensorRepository.findAll();
+            sensors = wifiSensorRepository.findAllWithLocation();
         } else {
-            // active 값에 따라 필터링하여 조회함
-            sensors = wifiSensorRepository.findByIsActive(active);
+            // ✅ active 값에 따라 필터링하여 Location과 함께 조회함
+            sensors = wifiSensorRepository.findByIsActiveWithLocation(active);
         }
 
         // WifiSensor 엔티티를 WifiSensorResponseDto로 변환하여 반환함

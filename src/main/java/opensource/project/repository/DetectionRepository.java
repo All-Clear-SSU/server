@@ -62,4 +62,11 @@ public interface DetectionRepository extends JpaRepository<Detection, Long> {
            "LEFT JOIN FETCH d.location " +
            "WHERE d.id = :id")
     Optional<Detection> findByIdWithRelations(@Param("id") Long id);
+
+    /**
+     * 특정 생존자의 모든 Detection 삭제
+     *
+     * @param survivorId 생존자 ID
+     */
+    void deleteBySurvivorId(Long survivorId);
 }

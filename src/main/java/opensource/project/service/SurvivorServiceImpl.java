@@ -8,6 +8,7 @@ import opensource.project.domain.enums.RescueStatus;
 import opensource.project.dto.PriorityScoreHistoryDto;
 import opensource.project.dto.SurvivorRequestDto;
 import opensource.project.dto.SurvivorResponseDto;
+import opensource.project.repository.DetectionRepository;
 import opensource.project.repository.LocationRepository;
 import opensource.project.repository.PriorityAssessmentRepository;
 import opensource.project.repository.SurvivorRepository;
@@ -27,6 +28,7 @@ public class SurvivorServiceImpl implements SurvivorService {
     private final LocationRepository locationRepository;
     private final PriorityAssessmentRepository priorityAssessmentRepository;
     private final WebSocketService webSocketService;
+    private final DetectionRepository detectionRepository;
 
     // 새로운 생존자 정보 등록
     @Override
@@ -128,10 +130,19 @@ public class SurvivorServiceImpl implements SurvivorService {
     @Override
     @Transactional
     // 생존자 목록에서 해당 id의 생존자를 제거
+    // ✅ CASCADE 삭제: priority_assessment → detection → survivor 순서로 삭제
     public void deleteSurvivor(Long id) {
         if (!survivorRepository.existsById(id)) {
             throw new IllegalArgumentException("Survivor not found with id: " + id);
         }
+
+        // 1. PriorityAssessment 삭제 (Detection과의 외래키 제약 때문에 먼저 삭제)
+        priorityAssessmentRepository.deleteBySurvivor_Id(id);
+
+        // 2. Detection 삭제
+        detectionRepository.deleteBySurvivorId(id);
+
+        // 3. Survivor 삭제
         survivorRepository.deleteById(id);
     }
 

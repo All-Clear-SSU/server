@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import opensource.project.dto.MqttWifiDetectionDto;
-import opensource.project.service.WifiDetectionMqttService;
+import opensource.project.service.MqttMessageBufferService;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -42,8 +42,8 @@ public class MqttConfig {
     // [추가] JSON 파싱을 위한 ObjectMapper를 주입받음
     private final ObjectMapper objectMapper;
 
-    // [추가] MQTT 메시지를 처리할 서비스를 주입받음
-    private final WifiDetectionMqttService wifiDetectionMqttService;
+    // [변경] MQTT 메시지를 버퍼링하는 서비스를 주입받음
+    private final MqttMessageBufferService mqttMessageBufferService;
 
     // ========================================
     // 🧪 테스트 모드: 하드코딩된 값 사용
@@ -161,13 +161,16 @@ public class MqttConfig {
      * MQTT 메시지를 처리하는 핸들러를 생성함
      * mqttInputChannel로부터 메시지를 받아서 처리함
      *
-     * [변경 전] 단순히 로그만 출력했음:
-     *   log.info("MQTT received: {}", payload);
+     * [변경 이력]
+     * 1차: 단순히 로그만 출력
+     * 2차: WifiDetectionMqttService를 직접 호출하여 동기 처리 (메시지 밀림 발생)
+     * 3차: MqttMessageBufferService를 통해 센서별 최신 메시지만 버퍼링 (현재)
      *
-     * [변경 후] WifiDetectionMqttService를 호출하여 비즈니스 로직을 처리함:
-     *   1. JSON 페이로드를 MqttWifiDetectionDto로 파싱함
-     *   2. WifiDetectionMqttService.processMqttMessage()를 호출함
-     *   3. 서비스에서 WebSocket 브로드캐스트 및 DB 저장 수행함
+     * [동작 방식]
+     * 1. JSON 페이로드를 MqttWifiDetectionDto로 파싱
+     * 2. 버퍼 서비스에 메시지를 비동기로 전달 (즉시 반환)
+     * 3. 버퍼 서비스가 센서별로 최신 메시지만 유지하고 주기적으로 배치 처리
+     * 4. 이전 메시지는 자동으로 폐기되어 최신 상태만 웹에 반영됨
      *
      * @return MessageHandler 인스턴스
      */
@@ -178,25 +181,23 @@ public class MqttConfig {
             try {
                 // MQTT 메시지의 페이로드를 문자열로 추출함
                 String payload = (String) message.getPayload();
-                log.info("=== MQTT 메시지 수신 ===");
+                log.debug("=== MQTT 메시지 수신 ===");
                 log.debug("Raw payload: {}", payload);
 
-                // [변경] JSON 문자열을 MqttWifiDetectionDto 객체로 파싱함
+                // JSON 문자열을 MqttWifiDetectionDto 객체로 파싱함
                 MqttWifiDetectionDto mqttData = objectMapper.readValue(payload, MqttWifiDetectionDto.class);
 
                 // 센서 ID (DB Primary Key)와 생존자 탐지 여부를 로그에 기록함
-                log.info("센서 ID (DB): {}, 생존자 탐지: {}, CSI 데이터 크기: {}",
+                log.debug("센서 ID: {}, 생존자 탐지: {}, CSI 데이터 크기: {}",
                         mqttData.getSensorId(),
                         mqttData.getSurvivorDetected(),
                         mqttData.getCsiAmplitudeSummary() != null ? mqttData.getCsiAmplitudeSummary().size() : 0);
 
-                // [변경] WifiDetectionMqttService를 호출하여 비즈니스 로직을 처리함
-                // 이 서비스에서 다음 작업을 수행함:
-                // 1. 항상: WebSocket으로 실시간 신호 데이터(그래프) 브로드캐스트
-                // 2. survivorDetected==true인 경우: 생존자 매칭 및 Detection 레코드 DB 저장
-                wifiDetectionMqttService.processMqttMessage(mqttData);
+                // [변경] 버퍼 서비스에 메시지를 비동기로 전달함
+                // 센서별로 최신 메시지만 유지되며, 이전 메시지는 자동 폐기됨
+                mqttMessageBufferService.bufferMessage(mqttData);
 
-                log.info("=== MQTT 메시지 처리 완료 ===");
+                log.debug("=== 메시지 버퍼링 완료 (비동기) ===");
 
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 // JSON 파싱 실패 시 에러 로그를 남김

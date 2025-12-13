@@ -72,14 +72,14 @@ public class AIDetectionProcessorService {
         AIDetectionResultDto.DetectionSummary summary = aiResult.getSummary();
 
         // Null 체크
-        if (allDetections == null || allDetections.isEmpty()) {
-            log.warn("No detections found in AI result. Skipping processing.");
-            return;
-        }
-
         if (summary == null) {
             log.warn("Summary is null in AI result. Using default values.");
             summary = new AIDetectionResultDto.DetectionSummary(0, 0, 0, 0);
+        }
+
+        if (allDetections == null || allDetections.isEmpty()) {
+            log.warn("No detections found in AI result. Skipping processing.");
+            return;
         }
 
         log.info("Processing {} detections (Fire: {}, Human: {}, Smoke: {})",
@@ -91,18 +91,28 @@ public class AIDetectionProcessorService {
         // 현재 프레임에서 이미 매칭된 생존자 ID 추적 (중복 매칭 방지)
         Set<Long> matchedSurvivorIds = new HashSet<>();
 
-        // Human 객체만 처리
+        // 사람(Human/Person 등) 객체만 처리
         int humanProcessed = 0;
         for (AIDetectionResultDto.DetectionObject detection : allDetections) {
-            if ("human".equalsIgnoreCase(detection.getClassName())) {
-                log.info("Processing human detection #{} - pose: {}, confidence: {}",
-                        ++humanProcessed, detection.getPose(), detection.getConfidence());
+            if (isHumanDetection(detection)) {
+                log.info("Processing human/person detection #{} - class: {}, pose: {}, confidence: {}",
+                        ++humanProcessed, detection.getClassName(), detection.getPose(), detection.getConfidence());
                 processHumanDetection(detection, allDetections, summary, cctv, location, videoUrl, matchedSurvivorIds);
             }
         }
 
         log.info("AI detection processing completed. Total detections: {}, Humans processed: {}, Matched survivors: {}",
                 allDetections.size(), humanProcessed, matchedSurvivorIds.size());
+
+    }
+
+    /**
+     * AI 모델이 사람을 "human" 외에 "person", "people" 등으로 표기할 때를 포함해 판단
+     */
+    private boolean isHumanDetection(AIDetectionResultDto.DetectionObject detection) {
+        if (detection == null || detection.getClassName() == null) return false;
+        String cls = detection.getClassName().trim().toLowerCase();
+        return "human".equals(cls) || "person".equals(cls) || "people".equals(cls);
     }
 
 
@@ -195,6 +205,7 @@ public class AIDetectionProcessorService {
 
         return savedDetection;
     }
+
 
     // Object Detection 결과를 기반으로 생존자 상태메시지 생성(더미)
     public String generateSurvivorStatusMessage(ObjectDetectionResultDto detectionResult) {

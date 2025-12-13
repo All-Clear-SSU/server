@@ -34,7 +34,8 @@ public class SurvivorMatchingService {
     private final DetectionRepository detectionRepository;
 
     // 바운딩 박스 중심점 거리 기반 매칭 임계값 (픽셀)
-    private static final double DISTANCE_THRESHOLD = 100.0;
+    // CCTV 회전 시에도 안정적으로 추적할 수 있도록 임계값 증가
+    private static final double DISTANCE_THRESHOLD = 300.0;
 
     /**
      * 기존 생존자를 찾거나 새로 생성

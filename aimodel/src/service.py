@@ -1,148 +1,85 @@
-"""
-===============================================================================
-[수정 이력] service.py - 원본 대비 변경사항
-===============================================================================
-1. import 경로 변경
-   - 원본: from .yolo_model import YOLOOnnx (상대 경로)
-   - 수정: from yolo_model import YOLOOnnx (절대 경로)
-   - 이유: EC2 배포 시 직접 실행 방식과 호환성 확보
+# NOTE:
+# - Refactored based on your provided full service.py
+# - DEMO MODE is enabled by default (FIXED 4 CCTV streams)
+# - FUTURE: Dynamic stream mode can be enabled by COMMENT / UNCOMMENT only
+#   (search for "FUTURE: DYNAMIC STREAM MODE")
 
-2. 경로 설정 개선
-   - 원본: MODEL_PATH = "./model/best_human.onnx" (상대 경로)
-   - 수정: BASE_DIR 기준 os.path.join() 사용 (절대 경로)
-   - 이유: 작업 디렉토리와 관계없이 안정적인 경로 참조
-
-3. POSE_CLASS_NAMES 변경
-   - 원본: ["Crawling", "Falling", "Sitting", "Standing"] (원본도 4개였으나 주석은 3개로 설명)
-   - 수정: 4개 클래스 명확히 정의 및 주석 수정
-   - 이유: 새 모델의 4개 클래스 지원
-
-4. 모델 로딩 안정성 개선
-   - 원본: yolo = YOLOOnnx(MODEL_PATH, CLASS_NAMES) (검증 없음)
-   - 수정: 모델 파일 존재 여부/크기 확인 로그 추가, try-except로 Pose 모델 로딩 실패 처리
-   - 이유: 배포 시 문제 진단 용이, 모델 로딩 실패해도 서비스는 계속 실행
-
-5. pose_model None 체크 추가 (line 219, 227, 297, 303, 503, 511)
-   - 원본: pose_model.predict_pose() 직접 호출
-   - 수정: if pose_model is not None: 조건 추가
-   - 이유: Pose 모델 로딩 실패 시에도 서비스 정상 동작
-
-6. Spring Boot 연동 설정 추가
-   - 수정: SPRING_BOOT_URL, STREAM_OUTPUT_DIR, 신뢰도 임계값 설정 추가
-   - 이유: 영상 분석 기능 지원
-
-7. 로컬 동영상 분석 / 라이브 스트리밍 분석 API 추가 + 관련 메서드 추가
-    - post("/analyze_video"): 로컬에 저장된 동영상 분석
-    - post("/start_live_stream"): 휴대폰 RTSP 주소로 라이브 영상을 분석 시작
-    - post("/stop_live_stream"): 라이브 스트리밍 분석 중단
-    - get("/stream_status/{cctv_id}"): 라이브 스트리밍 상태 조회
-"""
-# ==================================================
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import uvicorn
 import cv2
 import numpy as np
 import os
-from collections import Counter
 import threading
 from typing import Dict, Optional
 from datetime import datetime
-# [수정] 원본: from .yolo_model import YOLOOnnx (상대 경로)
-# EC2 배포 시 직접 실행 방식과 호환되도록 절대 경로로 변경
+import requests
+
 from yolo_model import YOLOOnnx
 from yolo_pose_model import YOLOPoseOnnx
 
-# ----------------- CONFIG -----------------
-# [수정] 원본: MODEL_PATH = "./model/best_human.onnx" (상대 경로)
-# 작업 디렉토리와 관계없이 안정적인 경로 참조를 위해 절대 경로로 변경
+# ==================================================
+# CONFIG
+# ==================================================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "model", "best_human.onnx")
-# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11x.onnx")  # x-large: 정확도 최고, 실시간 스트리밍 ❌
-# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11m.onnx")  # medium: 정확도 우선, 고사양 필요
-# COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11s.onnx")  # small: 균형, 실시간 스트리밍 ✅
-COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11n.onnx")  # nano: 속도 최고, 실시간 스트리밍 ✅✅ (권장)
-CLASS_NAMES = ["fire", "human", "smoke"]
 
-# --- POSE MODEL CONFIG ---
+MODEL_PATH = os.path.join(BASE_DIR, "model", "best_human.onnx")
+COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11m.onnx")
 POSE_MODEL_PATH = os.path.join(BASE_DIR, "model", "best_pose.onnx")
-# [수정] 원본: 3개 클래스 → 4개 클래스 (Crawling 추가, Fall → Falling 명칭 변경)
+
+CLASS_NAMES = ["fire", "human", "smoke"]
 POSE_CLASS_NAMES = ["Crawling", "Falling", "Sitting", "Standing"]
 
 SAVE_DIR = os.path.join(BASE_DIR, "predictions")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# Spring Boot URL (같은 EC2 서버에서 실행)
 SPRING_BOOT_URL = os.getenv("SPRING_BOOT_URL", "http://localhost:8080")
+SPRING_BOOT_AI_ENDPOINT = f"{SPRING_BOOT_URL.rstrip('/')}/detections/ai-analysis"
+HLS_BASE_URL = os.getenv("HLS_BASE_URL", "http://localhost:8080/streams")
 
-# 스트림 URL 베이스 (프론트엔드에서 접근하는 주소, 포트 없이 EC2 퍼블릭 주소 사용)
-STREAM_BASE_URL = os.getenv("STREAM_BASE_URL", "http://localhost:8080")
+# ===============================
+# DEMO MODE CONFIG (DEFAULT)
+# ===============================
+MAX_CCTV = 4
+STREAM_OUTPUT_DIR = "/home/ubuntu/streams"
 
-# HLS 스트림 출력 디렉토리 (영상 분석 결과를 HLS로 변환하여 저장)
-# 로컬 테스트: /tmp/streams, EC2 배포: /home/ubuntu/streams
-STREAM_OUTPUT_DIR = os.getenv("STREAM_OUTPUT_DIR", "/home/ubuntu/streams")
+# [DEMO MODE – ENABLED]
+# 시연에서는 CCTV가 최대 4대이므로 디렉토리를 미리 생성한다.
+for i in range(1, MAX_CCTV + 1):
+    os.makedirs(os.path.join(STREAM_OUTPUT_DIR, f"cctv{i}"), exist_ok=True)
 
-# 신뢰도 임계값
-DEFAULT_DETECTION_CONF_THRESHOLD = 0.3  # 0.5 → 0.3으로 낮춰서 더 많은 객체 탐지
+# [FUTURE: DYNAMIC STREAM MODE]
+# 아래 사전 디렉토리 생성 로직을 제거하고
+# analyze_live_stream_sync 내부에서 동적 생성하도록 변경한다.
+
+DEFAULT_DETECTION_CONF_THRESHOLD = 0.3
 DEFAULT_POSE_CONF_THRESHOLD = 0.3
-# ===================================================================================
 
-# ----------------- INIT -----------------
-# ============ 수정 사항: 모델 로딩 안정성 개선 ============
-# 1. 기본 객체 탐지 모델 (fire, human, smoke) + COCO 모델 (person)
-# 원본: yolo = YOLOOnnx(MODEL_PATH, CLASS_NAMES) (단일 모델)
-# 수정: yolo = YOLOOnnx(MODEL_PATH, COCO_MODEL_PATH, CLASS_NAMES) (하이브리드 모델)
-print(f"Loading Custom YOLO model from: {MODEL_PATH}")
-print(f"Custom model file exists: {os.path.exists(MODEL_PATH)}")
-if os.path.exists(MODEL_PATH):
-    print(f"Custom model file size: {os.path.getsize(MODEL_PATH)} bytes")
-else:
-    print(f"ERROR: Custom model file not found at {MODEL_PATH}")
-    print(f"Directory contents: {os.listdir(os.path.dirname(MODEL_PATH)) if os.path.exists(os.path.dirname(MODEL_PATH)) else 'Directory not found'}")
-
-print(f"Loading COCO model from: {COCO_MODEL_PATH}")
-print(f"COCO model file exists: {os.path.exists(COCO_MODEL_PATH)}")
-if os.path.exists(COCO_MODEL_PATH):
-    print(f"COCO model file size: {os.path.getsize(COCO_MODEL_PATH)} bytes")
-else:
-    print(f"ERROR: COCO model file not found at {COCO_MODEL_PATH}")
-
+# ==================================================
+# MODEL INIT
+# ==================================================
+print("[INIT] Loading detection models")
 yolo = YOLOOnnx(MODEL_PATH, COCO_MODEL_PATH, CLASS_NAMES)
 
-# 2. 자세 분류 모델 (Crawling, Falling, Sitting, Standing)
-# YOLOPoseOnnx 클래스를 사용하여 초기화
-# 분류 모델의 입력 크기에 맞게 input_shape를 (224, 224) 등으로 변경할 수 있음
-print(f"Loading Pose model from: {POSE_MODEL_PATH}")
-print(f"Pose model file exists: {os.path.exists(POSE_MODEL_PATH)}")
-
-# 원본: pose_model = YOLOPoseOnnx(POSE_MODEL_PATH, POSE_CLASS_NAMES, input_shape=(640, 640))
-# 추가: try-except로 Pose 모델 로딩 실패 시 로그 출력(서비스는 실행됨)
 pose_model = None
 try:
     pose_model = YOLOPoseOnnx(POSE_MODEL_PATH, POSE_CLASS_NAMES, input_shape=(640, 640))
-    print("[SUCCESS] Pose model loaded successfully")
+    print("[INIT] Pose model loaded")
 except Exception as e:
-    print(f"[FAILED] WARNING: Failed to load pose model: {e}")
-    print("Pose detection features will be disabled, but the service will continue")
-# ======================================================== 
+    print(f"[WARN] Pose model disabled: {e}")
 
+# ==================================================
+# FASTAPI
+# ==================================================
 app = FastAPI(title="YOLO ONNX Detection API")
 
-# ============ LIVE STREAMING REQUEST/RESPONSE MODELS ============
+# ==================================================
+# REQUEST MODELS
+# ==================================================
 class StartLiveStreamRequest(BaseModel):
     rtsp_url: str
     cctv_id: int
     location_id: int
-    conf_threshold: Optional[float] = DEFAULT_DETECTION_CONF_THRESHOLD
-    pose_conf_threshold: Optional[float] = DEFAULT_POSE_CONF_THRESHOLD
-
-class AnalyzeVideoRequest(BaseModel):
-    video_path: str
-    cctv_id: int
-    location_id: int
-    spring_boot_url: Optional[str] = SPRING_BOOT_URL
-    output_stream_dir: Optional[str] = STREAM_OUTPUT_DIR
     conf_threshold: Optional[float] = DEFAULT_DETECTION_CONF_THRESHOLD
     pose_conf_threshold: Optional[float] = DEFAULT_POSE_CONF_THRESHOLD
 
@@ -152,1143 +89,441 @@ class StopLiveStreamRequest(BaseModel):
 class StreamStatusResponse(BaseModel):
     cctv_id: int
     is_streaming: bool
-    rtsp_url: Optional[str] = None
-    started_at: Optional[str] = None
-    frame_count: Optional[int] = None
+    rtsp_url: Optional[str]
+    started_at: Optional[str]
+    frame_count: Optional[int]
 
-# ============ STREAM MANAGER ============
+# ==================================================
+# STREAM MANAGER
+# ==================================================
 class StreamManager:
-    """
-    여러 RTSP 라이브 스트림을 동시에 관리하는 클래스
-    """
     def __init__(self):
-        self.streams: Dict[int, Dict] = {}  # cctv_id -> stream_info
         self.lock = threading.Lock()
 
+        # ===============================
+        # DEMO MODE – ENABLED
+        # ===============================
+        # CCTV 스트림을 1~4번 슬롯으로 고정한다.
+        self.streams: Dict[int, Dict] = {
+            i: self._create_stream_slot()
+            for i in range(1, MAX_CCTV + 1)
+        }
+
+        # ===============================
+        # FUTURE: DYNAMIC STREAM MODE
+        # ===============================
+        # 아래 한 줄을 활성화하고 위 DEMO MODE 블록을 주석 처리하면
+        # 가변 스트림 구조로 즉시 전환 가능하다.
+        # ---------------------------------
+        # self.streams: Dict[int, Dict] = {}
+        # ---------------------------------
+
+    def _create_stream_slot(self):
+        return {
+            "is_running": False,
+            "thread": None,
+            "stop_event": threading.Event(),
+            "frame_count": 0,
+            "started_at": None,
+            "rtsp_url": None,
+            "location_id": None,
+            "conf_threshold": DEFAULT_DETECTION_CONF_THRESHOLD,
+            "pose_conf_threshold": DEFAULT_POSE_CONF_THRESHOLD,
+        }
+
+    def _validate_id(self, cctv_id: int):
+        # ===============================
+        # DEMO MODE – ENABLED
+        # ===============================
+        if cctv_id not in self.streams:
+            raise ValueError("cctv_id must be between 1 and 4 for demo")
+
+        # ===============================
+        # FUTURE: DYNAMIC STREAM MODE
+        # ===============================
+        # 아래 검증을 사용하려면 위 DEMO MODE 검증을 주석 처리한다.
+        # ---------------------------------
+        # if not isinstance(cctv_id, int):
+        #     raise ValueError("cctv_id must be int")
+        # ---------------------------------
+
     def start_stream(self, cctv_id: int, rtsp_url: str, location_id: int,
-                    conf_threshold: float, pose_conf_threshold: float) -> bool:
-        """스트림 시작"""
+                     conf_threshold: float, pose_conf_threshold: float) -> bool:
         with self.lock:
-            if cctv_id in self.streams and self.streams[cctv_id].get("is_running"):
-                print(f"Stream {cctv_id} is already running")
+            # [FUTURE: DYNAMIC STREAM MODE]
+            # if cctv_id not in self.streams:
+            #     self.streams[cctv_id] = self._create_stream_slot()
+
+            self._validate_id(cctv_id)
+            slot = self.streams[cctv_id]
+
+            if slot["is_running"]:
                 return False
 
-            # 스트림 정보 저장
-            stream_info = {
+            slot.update({
+                "is_running": True,
                 "rtsp_url": rtsp_url,
                 "location_id": location_id,
                 "conf_threshold": conf_threshold,
                 "pose_conf_threshold": pose_conf_threshold,
-                "is_running": True,
-                "started_at": datetime.now().isoformat(),
                 "frame_count": 0,
-                "stop_event": threading.Event()
-            }
-            self.streams[cctv_id] = stream_info
+                "started_at": datetime.now().isoformat(),
+            })
+            slot["stop_event"].clear()
 
-            # 백그라운드 스레드에서 스트림 처리
-            thread = threading.Thread(
-                target=self._process_stream,
-                args=(cctv_id,),
-                daemon=True
+            t = threading.Thread(
+                target=analyze_live_stream_sync,
+                args=(
+                    rtsp_url,
+                    cctv_id,
+                    STREAM_OUTPUT_DIR,
+                    conf_threshold,
+                    pose_conf_threshold,
+                    slot["stop_event"],
+                    self,
+                ),
+                daemon=True,
             )
-            stream_info["thread"] = thread
-            thread.start()
-
-            print(f"Stream {cctv_id} started: {rtsp_url}")
+            slot["thread"] = t
+            t.start()
             return True
 
     def stop_stream(self, cctv_id: int) -> bool:
-        """스트림 중지"""
+        self._validate_id(cctv_id)
         with self.lock:
-            if cctv_id not in self.streams:
-                print(f"Stream {cctv_id} not found")
+            slot = self.streams[cctv_id]
+            if not slot["is_running"]:
                 return False
-
-            stream_info = self.streams[cctv_id]
-            if not stream_info.get("is_running"):
-                print(f"Stream {cctv_id} is not running")
-                return False
-
-            # 중지 신호 전송
-            stream_info["stop_event"].set()
-            stream_info["is_running"] = False
-
-            print(f"Stream {cctv_id} stop signal sent")
+            slot["stop_event"].set()
+            slot["is_running"] = False
             return True
 
-    def get_status(self, cctv_id: int) -> Optional[Dict]:
-        """스트림 상태 조회"""
-        with self.lock:
-            if cctv_id not in self.streams:
-                return None
-
-            stream_info = self.streams[cctv_id]
-            return {
-                "cctv_id": cctv_id,
-                "is_streaming": stream_info.get("is_running", False),
-                "rtsp_url": stream_info.get("rtsp_url"),
-                "started_at": stream_info.get("started_at"),
-                "frame_count": stream_info.get("frame_count", 0)
-            }
-
-    def _process_stream(self, cctv_id: int):
-        """백그라운드에서 스트림 처리 (별도 스레드)"""
-        try:
-            stream_info = self.streams[cctv_id]
-            analyze_live_stream_sync(
-                rtsp_url=stream_info["rtsp_url"],
-                cctv_id=cctv_id,
-                location_id=stream_info["location_id"],
-                spring_boot_url=SPRING_BOOT_URL,
-                output_stream_dir=STREAM_OUTPUT_DIR,
-                conf_threshold=stream_info["conf_threshold"],
-                pose_conf_threshold=stream_info["pose_conf_threshold"],
-                stop_event=stream_info["stop_event"],
-                stream_manager=self
-            )
-        except Exception as e:
-            print(f"Stream {cctv_id} processing error: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
-        finally:
-            with self.lock:
-                if cctv_id in self.streams:
-                    self.streams[cctv_id]["is_running"] = False
-            print(f"Stream {cctv_id} thread finished")
+    def get_status(self, cctv_id: int) -> Dict:
+        self._validate_id(cctv_id)
+        s = self.streams[cctv_id]
+        return {
+            "cctv_id": cctv_id,
+            "is_streaming": s["is_running"],
+            "rtsp_url": s["rtsp_url"],
+            "started_at": s["started_at"],
+            "frame_count": s["frame_count"],
+        }
 
     def update_frame_count(self, cctv_id: int, count: int):
-        """프레임 카운트 업데이트"""
-        with self.lock:
-            if cctv_id in self.streams:
-                self.streams[cctv_id]["frame_count"] = count
+        self.streams[cctv_id]["frame_count"] = count
 
-# 전역 StreamManager 인스턴스
 stream_manager = StreamManager()
 
-# ----------------- HELPER FUNCTION -----------------
-def convert_to_serializable(obj):
-    """
-    numpy 타입을 JSON 직렬화 가능한 Python 기본 타입으로 변환
-    int64, float64 등 numpy 타입이 JSON 직렬화 시 에러를 발생시키는 문제 해결
-    """
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {key: convert_to_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(item) for item in obj]
-    else:
-        return obj
-
-def draw_pose_predictions(img, detections):
-    """
-    새로운 detections JSON 구조를 기반으로 모든 바운딩 박스와 레이블을 그립니다
-    'human' 클래스에는 'pose' 정보를 추가로 표시
-    """
-    img_copy = img.copy()
-    for det in detections:
-        box = det.get("box")
-        if box is None:
-            continue
-            
-        x1, y1, x2, y2 = map(int, [box.get("x1", 0), box.get("y1", 0), box.get("x2", 0), box.get("y2", 0)])
-        class_name = det.get("class", "Unknown")
-        confidence = det.get("confidence", 0)
-        
-        # 클래스별 색상 설정
-        if class_name == "fire":
-            color = (0, 0, 255) # Red
-        elif class_name == "smoke":
-            color = (100, 100, 100) # Gray
-        elif class_name == "human":
-            color = (0, 255, 0) # Green
-        else:
-            color = (255, 0, 0) # Blue
-            
-        # 레이블 생성
-        label = f"{class_name} ({confidence*100:.0f}%)"
-        
-        # 'human' 클래스일 경우, 'pose' 정보 추가
-        if class_name == "human":
-            pose = det.get('pose', 'Unknown')
-            pose_score = det.get('pose_score', 0)
-            label = f"Human: {pose} ({pose_score*100:.0f}%)" # 포즈 점수를 표시하도록 수정
-            
-        # 사각형 및 텍스트 그리기
-        cv2.rectangle(img_copy, (x1, y1), (x2, y2), color, 2)
-        # 텍스트 배경 추가 (가독성)
-        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        cv2.rectangle(img_copy, (x1, y1 - h - 10), (x1 + w, y1 - 10), color, -1)
-        cv2.putText(img_copy, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-    return img_copy
-
-# ----------------- HEALTH -----------------
+# ==================================================
+# API
+# ==================================================
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "mode": "demo-fixed-4"}
 
-# ----------------- STANDARD PREDICT (JSON) -----------------
-@app.post("/predict")
-async def predict(file: UploadFile = File(...), conf_threshold: float = 0.5):
-    """
-    기본 YOLO 모델을 실행하고, 원하시는 JSON 포맷으로 결과를 반환합니다.
-    (yolo.predict가 이 포맷을 반환한다고 가정)
-    """
-    # 임시 파일 저장
-    temp_path = os.path.join(SAVE_DIR, f"temp_base_{file.filename}")
-    contents = await file.read()
-    with open(temp_path, "wb") as f:
-        f.write(contents)
-    
-    result_image_path = os.path.join(SAVE_DIR, f"pred_base_{file.filename}")
-    result = yolo.predict(temp_path, conf_threshold=conf_threshold, save_path=result_image_path)
-    
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
-
-    if "image_path" not in result:
-        result["image_path"] = result_image_path
-
-    return JSONResponse(content=result)
-
-# ----------------- STANDARD PREDICT (IMAGE) -----------------
-@app.post("/predict_image")
-async def predict_image(file: UploadFile = File(...), conf_threshold: float = 0.5):
-    """
-    기본 YOLO 모델을 실행하고, 주석이 달린 이미지를 반환합니다.
-    """
-    temp_path = os.path.join(SAVE_DIR, f"temp_base_img_{file.filename}")
-    contents = await file.read()
-    with open(temp_path, "wb") as f:
-        f.write(contents)
-
-    result_image_path = os.path.join(SAVE_DIR, f"pred_base_img_{file.filename}")
-    result = yolo.predict(temp_path, conf_threshold=conf_threshold, save_path=result_image_path)
-    
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
-    
-    image_path = result.get("image_path")
-    if not image_path or not os.path.exists(image_path):
-        return JSONResponse(status_code=404, content={"error": "Annotated image not found"})
-        
-    return FileResponse(image_path, media_type="image/jpeg")
-
-# ----------------- POSE PIPELINE (JSON) -----------------
-@app.post("/predict_with_pose")
-async def predict_with_pose(
-    file: UploadFile = File(...), 
-    conf_threshold: float = 0.5, 
-    pose_conf_threshold: float = 0.3
-):
-    """
-    YOLO (Detection) + YOLOPose (Classification) 파이프라인을 실행하고, 
-    'pose'가 추가된 JSON을 반환합니다.
-    """
-    # 1. 이미지 읽기
-    contents = await file.read()
-    np_arr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    
-    if img is None:
-        return JSONResponse(status_code=400, content={"error": "Invalid image"})
-
-    # 2. 임시 원본 파일 저장 (yolo.predict가 파일 경로를 받으므로)
-    temp_path = os.path.join(SAVE_DIR, f"temp_pose_{file.filename}")
-    cv2.imwrite(temp_path, img)
-
-    # 3. 기본 YOLO 모델 실행 (주석/저장 없이 JSON만 받기)
-    yolo_result = yolo.predict(temp_path, conf_threshold=conf_threshold, save_path=None) 
-    
-    if "detections" not in yolo_result:
-        os.remove(temp_path)
-        return JSONResponse(status_code=500, content={"error": "Invalid base prediction format", "data": yolo_result})
-
-    # 4. 'human' 객체에 대해 Pose 모델 실행
-    final_detections = []
-    pose_counts = Counter()
-
-    for det in yolo_result.get("detections", []):
-        if det.get("class") == "human":
-            # 4a. 'human' 박스 좌표로 원본 이미지 크롭
-            box = det.get("box", {})
-            x1, y1, x2, y2 = map(int, [box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")])
-            
-            # 크롭 (패딩 없이 원본 박스 사용, 필요시 패딩 추가)
-            cropped_img = img[y1:y2, x1:x2]
-            
-            if cropped_img.size == 0:
-                det["pose"] = "Unknown (Crop Error)"
-                det["pose_score"] = 0.0
-                final_detections.append(det)
-                continue
-
-            # 4c. Pose 모델 실행 (새로운 YOLOPoseOnnx 클래스 사용)
-            # predict_pose는 (class_name, score)를 반환
-            if pose_model is not None:
-                detected_pose, pose_score = pose_model.predict_pose(cropped_img, pose_conf_threshold)
-
-                # 4e. 'pose' 정보 추가
-                det["pose"] = detected_pose
-                det["pose_score"] = pose_score # pose 점수도 추가
-                pose_counts[detected_pose] += 1
-            else:
-                det["pose"] = "Unknown (Model Not Loaded)"
-                det["pose_score"] = 0.0
-            
-        final_detections.append(det)
-
-    # 5. 최종 Summary 업데이트
-    base_summary = yolo_result.get("summary", {})
-    base_summary["pose_counts"] = dict(pose_counts) # 예: {"Falling": 1, "Standing": 2}
-
-    # 6. 주석이 달린 최종 이미지 생성 및 저장 (JSON에 경로 포함)
-    annotated_img = draw_pose_predictions(img, final_detections)
-    final_image_path = os.path.join(SAVE_DIR, f"final_pose_{file.filename}")
-    cv2.imwrite(final_image_path, annotated_img)
-    
-    # 7. 임시 원본 파일 삭제
-    os.remove(temp_path)
-
-    # 8. 최종 JSON 반환
-    return JSONResponse(content={
-        "image_path": final_image_path,
-        "detections": final_detections,
-        "summary": base_summary
-    })
-
-# ----------------- POSE PIPELINE (IMAGE) -----------------
-@app.post("/predict_image_with_pose")
-async def predict_image_with_pose(
-    file: UploadFile = File(...), 
-    conf_threshold: float = 0.5, 
-    pose_conf_threshold: float = 0.3
-):
-    """
-    YOLO + Pose 파이프라인을 실행하고, 'pose' 정보까지 시각화된
-    최종 이미지를 반환합니다.
-    """
-    # 1. 이미지 읽기
-    contents = await file.read()
-    np_arr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    
-    if img is None:
-        return JSONResponse(status_code=400, content={"error": "Invalid image"})
-
-    # 2. 임시 원본 파일 저장
-    temp_path = os.path.join(SAVE_DIR, f"temp_pose_img_{file.filename}")
-    cv2.imwrite(temp_path, img)
-
-    # 3. 기본 YOLO 모델 실행
-    yolo_result = yolo.predict(temp_path, conf_threshold=conf_threshold, save_path=None) 
-    
-    if "detections" not in yolo_result:
-        os.remove(temp_path)
-        return JSONResponse(status_code=500, content={"error": "Invalid base prediction format", "data": yolo_result})
-
-    # 4. 'human' 객체에 대해 Pose 모델 실행
-    final_detections = []
-    
-    for det in yolo_result.get("detections", []):
-        if det.get("class") == "human":
-            box = det.get("box", {})
-            x1, y1, x2, y2 = map(int, [box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")])
-            
-            cropped_img = img[y1:y2, x1:x2]
-            
-            if cropped_img.size == 0:
-                det["pose"] = "Unknown"
-                final_detections.append(det)
-                continue
-
-            # 4c. Pose 모델 실행 (새로운 클래스 사용)
-            if pose_model is not None:
-                detected_pose, pose_score = pose_model.predict_pose(cropped_img, pose_conf_threshold)
-
-                det["pose"] = detected_pose
-                det["pose_score"] = pose_score # 이미지 레이블에 점수를 쓰기 위해
-            else:
-                det["pose"] = "Unknown (Model Not Loaded)"
-                det["pose_score"] = 0.0
-            
-        final_detections.append(det)
-
-    # 5. 주석이 달린 최종 이미지 생성 및 저장
-    annotated_img = draw_pose_predictions(img, final_detections)
-    final_image_path = os.path.join(SAVE_DIR, f"final_pose_image_{file.filename}")
-    cv2.imwrite(final_image_path, annotated_img)
-    
-    # 6. 임시 원본 파일 삭제
-    os.remove(temp_path)
-
-    # 7. 최종 이미지 반환
-    return FileResponse(final_image_path, media_type="image/jpeg")
-
-# ============ ====VIDEO ANALYSIS + HLS STREAMING ==================
-# 로컬에 저장된 동영상 파일을 분석하여 YOLO 탐지 + Pose 분류를 수행하고,
-# 결과를 Spring Boot API로 전송하며, HLS 스트리밍 파일을 생성
-# ====================================================================
-@app.post("/analyze_video")
-async def analyze_video(request: AnalyzeVideoRequest):
-    """
-    동영상 분석 + HLS 변환 + Spring Boot API 호출
-
-    Args:
-        request: 동영상 분석 요청 (JSON body)
-    """
-    import subprocess
-    import requests
-    import threading
-    import traceback
-    import gc
-
-    # 백그라운드에서 비동기로 분석 실행
-    def run_analysis_in_background():
-        try:
-            analyze_video_sync(
-                request.video_path,
-                request.cctv_id,
-                request.location_id,
-                request.spring_boot_url,
-                request.output_stream_dir,
-                request.conf_threshold,
-                request.pose_conf_threshold
-            )
-        except Exception as e:
-            print(f"Background analysis error: {str(e)}")
-            print(traceback.format_exc())
-
-    # 백그라운드 스레드 시작
-    analysis_thread = threading.Thread(target=run_analysis_in_background)
-    analysis_thread.daemon = True
-    analysis_thread.start()
-
-    # 즉시 응답 반환 (분석은 백그라운드에서 계속 진행)
-    return JSONResponse(content={
-        "status": "processing",
-        "message": "Video analysis started in background",
-        "cctv_id": request.cctv_id,
-        "location_id": request.location_id,
-        "video_path": request.video_path
-    })
-
-def analyze_video_sync(
-    video_path: str,
-    cctv_id: int,
-    location_id: int,
-    spring_boot_url: str,
-    output_stream_dir: str,
-    conf_threshold: float,
-    pose_conf_threshold: float
-):
-    """
-    실제 비디오 분석 로직 (동기 실행) - 라이브 스트리밍 방식
-    분석하면서 동시에 FFmpeg로 HLS 세그먼트를 실시간 생성
-    """
-    import subprocess
-    import requests
-    import traceback
-    import gc
-
+@app.post("/start_live_stream")
+def start_live_stream(req: StartLiveStreamRequest):
     try:
-        # 경로 검증 (로그 확인용)
-        print(f"=== Video Analysis Request (Live Streaming Mode) ===")
-        print(f"Video path: {video_path}")
-        print(f"CCTV ID: {cctv_id}, Location ID: {location_id}")
-
-        if not os.path.exists(video_path):
-            error_msg = f"Video file not found: {video_path}"
-            print(f"ERROR: {error_msg}")
-            return JSONResponse(status_code=404, content={"error": error_msg})
-
-        if not os.path.isfile(video_path):
-            error_msg = f"Path is not a file: {video_path}"
-            print(f"ERROR: {error_msg}")
-            return JSONResponse(status_code=400, content={"error": error_msg})
-
-        # 파일 읽기 권한 확인
-        if not os.access(video_path, os.R_OK):
-            error_msg = f"No read permission for file: {video_path}"
-            print(f"ERROR: {error_msg}")
-            return JSONResponse(status_code=403, content={"error": error_msg})
-
-        print(f"Video file validated successfully")
-
-    except Exception as e:
-        error_msg = f"Video path validation failed: {str(e)}"
-        print(f"ERROR: {error_msg}")
-        print(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": error_msg, "traceback": traceback.format_exc()})
-
-    # HLS 출력 디렉토리 설정
-    stream_output_dir_path = os.path.join(output_stream_dir, f"cctv{cctv_id}")
-    os.makedirs(stream_output_dir_path, exist_ok=True)
-    hls_output = os.path.join(stream_output_dir_path, "playlist.m3u8")
-
-    # 기존 HLS 파일 삭제 (새로운 스트림을 위해)
-    import glob
-    for old_file in glob.glob(os.path.join(stream_output_dir_path, "*.ts")):
-        os.remove(old_file)
-    for old_file in glob.glob(os.path.join(stream_output_dir_path, "*.m3u8")):
-        os.remove(old_file)
-    print(f"Cleaned up old HLS files in {stream_output_dir_path}")
-
-    ffmpeg_process = None
-
-    try:
-        # 영상 프레임별 분석
-        cap = cv2.VideoCapture(video_path)
-
-        if not cap.isOpened():
-            error_msg = f"Failed to open video file: {video_path}. The file may be corrupted or in an unsupported format."
-            print(f"ERROR: {error_msg}")
-            return JSONResponse(status_code=500, content={"error": error_msg})
-
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        print(f"Video properties: FPS={fps}, Width={frame_width}, Height={frame_height}")
-
-        if fps == 0 or frame_width == 0 or frame_height == 0:
-            error_msg = f"Invalid video properties: FPS={fps}, Width={frame_width}, Height={frame_height}"
-            print(f"ERROR: {error_msg}")
-            cap.release()
-            return JSONResponse(status_code=500, content={"error": error_msg})
-
-        # 영상 리사이즈 설정 (실시간 처리 속도 향상을 위해 480p로 설정)
-        max_height = 480
-        resize_needed = frame_height > max_height
-        if resize_needed:
-            resize_scale = max_height / frame_height
-            new_width = int(frame_width * resize_scale)
-            new_height = max_height
-            print(f"Resizing video: {frame_width}x{frame_height} -> {new_width}x{new_height} (scale: {resize_scale:.2f})")
-        else:
-            new_width = frame_width
-            new_height = frame_height
-            print(f"No resize needed: {frame_width}x{frame_height}")
-
-        # 짝수로 맞추기 (H.264 요구사항)
-        new_width = new_width if new_width % 2 == 0 else new_width - 1
-        new_height = new_height if new_height % 2 == 0 else new_height - 1
-
-        # FFmpeg 프로세스 시작 (라이브 HLS 스트리밍 모드)
-        # 실시간 스트리밍 최적화 설정
-        target_fps = min(fps, 15)  # 최대 15fps로 제한 (처리 부하 대폭 감소)
-        ffmpeg_cmd = [
-            "ffmpeg",       # 마찬가지로 로컬에서 테스트시 경로 "/opt/homebrew/bin/ffmpeg"로 변경
-            "-y",  # 덮어쓰기
-            "-f", "rawvideo",  # 입력 포맷: raw video
-            "-vcodec", "rawvideo",
-            "-pix_fmt", "bgr24",  # OpenCV 기본 포맷
-            "-s", f"{new_width}x{new_height}",  # 해상도
-            "-r", str(target_fps),  # 프레임레이트 (30fps로 제한)
-            "-i", "-",  # stdin에서 입력 받음
-            "-c:v", "libx264",  # H.264 인코딩
-            "-preset", "ultrafast",  # 가장 빠른 인코딩 (실시간용)
-            "-tune", "zerolatency",  # 저지연 튜닝
-            "-crf", "23",  # 품질 향상 (28 → 23, 낮을수록 고품질)
-            "-maxrate", "2M",  # 최대 비트레이트 2Mbps (대역폭 제한)
-            "-bufsize", "4M",  # 버퍼 크기
-            "-g", str(target_fps),  # GOP 크기 (1초마다 키프레임, 화면 깨짐 방지)
-            "-keyint_min", str(target_fps),  # 최소 키프레임 간격
-            "-sc_threshold", "0",  # 씬 체인지 감지 비활성화 (일정한 키프레임)
-            "-force_key_frames", f"expr:gte(t,n_forced*1)",  # 1초마다 강제 키프레임
-            # ========== 실시간 flush 옵션 (playlist 즉시 갱신) ==========
-            "-fflags", "+flush_packets+genpts",  # 패킷 즉시 flush + 타임스탬프 생성
-            "-flush_packets", "1",  # 패킷을 즉시 디스크에 쓰기
-            # ========== HLS 최적화 ==========
-            "-hls_time", "1",  # 1초 세그먼트 (지연 감소)
-            "-hls_list_size", "0",  # 모든 세그먼트 유지 (로컬 비디오용)
-            "-hls_flags", "append_list+omit_endlist+independent_segments",  # 실시간 갱신
-            "-hls_segment_type", "mpegts",  # MPEG-TS 명시
-            "-start_number", "0",  # 세그먼트 번호 0부터 시작
-            "-hls_segment_filename", os.path.join(stream_output_dir_path, "segment_%03d.ts"),
-            hls_output
-        ]
-
-        print(f"Starting FFmpeg process for live HLS streaming...")
-        ffmpeg_process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0  # 버퍼 비활성화 (즉시 전송)
+        ok = stream_manager.start_stream(
+            req.cctv_id,
+            req.rtsp_url,
+            req.location_id,
+            req.conf_threshold,
+            req.pose_conf_threshold,
         )
-        print(f"FFmpeg process started (PID: {ffmpeg_process.pid})")
+        if not ok:
+            return JSONResponse(status_code=409, content={"error": "Stream already running"})
+        return {"status": "started", "cctv_id": req.cctv_id}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
 
-        frame_count = 0
-        analysis_interval = fps * 1  # 1초마다 분석
+@app.post("/stop_live_stream")
+def stop_live_stream(req: StopLiveStreamRequest):
+    try:
+        ok = stream_manager.stop_stream(req.cctv_id)
+        if not ok:
+            return JSONResponse(status_code=404, content={"error": "Stream not running"})
+        return {"status": "stopped", "cctv_id": req.cctv_id}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
 
-        # ========== 프레임 스킵 설정 (실시간 처리 속도 향상) ==========
-        # 모든 프레임을 FFmpeg로 보내지 않고, 일부만 전송하여 처리 부하 감소
-        frame_skip = 4  # 매 4프레임마다 하나만 전송 (처리량 대폭 감소)
-        # frame_skip = 1일 경우 모든 프레임 전송, 4일 경우 1/4만 전송
-        print(f"Frame skip: {frame_skip} (output FPS: ~{target_fps // frame_skip})")
+@app.get("/stream_status/{cctv_id}", response_model=StreamStatusResponse)
+def stream_status(cctv_id: int):
+    return stream_manager.get_status(cctv_id)
 
-        analyzed_frames = []
-
-        print(f"Analysis interval: Every {analysis_interval} frames (every 1 second)")
-
-        last_detections = []
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                print(f"\n=== Video file ended (total {frame_count} frames) ===")
-                break
-
-            # 프레임 리사이즈
-            if resize_needed or frame.shape[1] != new_width or frame.shape[0] != new_height:
-                frame = cv2.resize(frame, (new_width, new_height))
-
-            if frame_count % analysis_interval == 0:
-                # 임시 프레임 저장
-                temp_frame_path = os.path.join(SAVE_DIR, f"temp_frame_{cctv_id}.jpg")
-                cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-                # YOLO 기본 탐지 실행
-                yolo_result = yolo.predict(temp_frame_path, conf_threshold=conf_threshold, save_path=None)
-
-                if "detections" in yolo_result:
-                    # Human 객체에 대해 Pose 분류 실행
-                    final_detections = []
-
-                    for det in yolo_result.get("detections", []):
-                        if det.get("class") == "human":
-                            # Human 박스 크롭
-                            box = det.get("box", {})
-                            x1, y1, x2, y2 = map(int, [box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")])
-                            cropped_img = frame[y1:y2, x1:x2]
-
-                            if cropped_img.size > 0 and pose_model is not None:
-                                # Pose 분류
-                                detected_pose, pose_score = pose_model.predict_pose(cropped_img, pose_conf_threshold)
-                                det["pose"] = detected_pose
-                                det["pose_score"] = pose_score
-
-                                # 메모리 해제
-                                del cropped_img
-                            elif pose_model is None:
-                                det["pose"] = "Unknown (Model Not Loaded)"
-                                det["pose_score"] = 0.0
-
-                        final_detections.append(det)
-
-                    # Spring Boot에 맞게 detections 필드명 변환 (numpy 타입도 변환)
-                    formatted_detections = []
-                    for det in final_detections:
-                        formatted_det = {
-                            "className": det.get("class"),
-                            "confidence": float(det.get("confidence")) if det.get("confidence") is not None else None,
-                            "box": convert_to_serializable(det.get("box")),
-                            "pose": det.get("pose"),
-                            "poseScore": float(det.get("pose_score")) if det.get("pose_score") is not None else None
-                        }
-                        formatted_detections.append(formatted_det)
-
-                    formatted_summary = {
-                        "fireCount": int(yolo_result.get("summary", {}).get("fire_count", 0)),
-                        "humanCount": int(yolo_result.get("summary", {}).get("human_count", 0)),
-                        "smokeCount": int(yolo_result.get("summary", {}).get("smoke_count", 0)),
-                        "totalObjects": int(yolo_result.get("summary", {}).get("total_objects", 0))
-                    }
-
-                    # Spring Boot API 호출
-                    try:
-                        payload = {
-                            "aiResult": {
-                                "imagePath": temp_frame_path,
-                                "detections": formatted_detections,
-                                "summary": formatted_summary
-                            },
-                            "cctvId": cctv_id,
-                            "locationId": location_id,
-                            "videoUrl": f"{STREAM_BASE_URL}/streams/cctv{cctv_id}/playlist.m3u8"
-                        }
-
-                        print(f"\n=== Sending to Spring Boot (Frame {frame_count}) ===")
-                        print(f"cctvId: {cctv_id}, locationId: {location_id}, Detections: {len(formatted_detections)}")
-
-                        response = requests.post(
-                            f"{spring_boot_url}/detections/ai-analysis",
-                            json=payload,
-                            timeout=5
-                        )
-
-                        if response.status_code == 200:
-                            print(f"Frame {frame_count}: Sent to Spring Boot successfully")
-                        else:
-                            print(f"Frame {frame_count}: Spring Boot API error - {response.status_code}")
-
-                    except Exception as e:
-                        print(f"Frame {frame_count}: Failed to send to Spring Boot - {str(e)}")
-
-                    analyzed_frames.append({
-                        "frame_number": frame_count,
-                        "timestamp": frame_count / fps,
-                        "detections": final_detections,
-                        "summary": yolo_result.get("summary", {})
-                    })
-
-                    # 바운딩 박스가 그려진 프레임 저장
-                    last_detections = final_detections
-
-            # ========== 프레임 스킵 적용: 매 N프레임마다만 FFmpeg로 전송 ==========
-            if frame_count % frame_skip == 0:
-                # 바운딩 박스 그리기 (마지막 분석 결과 사용)
-                if last_detections:
-                    annotated_frame = draw_pose_predictions(frame, last_detections)
-                else:
-                    annotated_frame = frame.copy()
-
-                # FFmpeg로 프레임 전송 (실시간 HLS 생성)
-                try:
-                    ffmpeg_process.stdin.write(annotated_frame.tobytes())
-                except BrokenPipeError:
-                    print("FFmpeg pipe broken, stopping...")
-                    break
-
-                # 메모리 해제
-                del annotated_frame
-
-            # 프레임 메모리 해제
-            del frame
-
-            frame_count += 1
-
-            # 진행 상황 출력 (100프레임마다)
-            if frame_count % 100 == 0:
-                print(f"Processed {frame_count} frames, HLS segments being generated...")
-
-        cap.release()
-        print(f"Video analysis completed: {frame_count} frames processed")
-
-        # FFmpeg 프로세스 종료
-        if ffmpeg_process:
-            ffmpeg_process.stdin.close()
-            ffmpeg_process.wait(timeout=30)
-            print(f"FFmpeg process finished")
-
-        # 로컬 동영상 파일이므로 HLS playlist에 #EXT-X-ENDLIST 추가
-        # 이를 통해 HLS 플레이어가 스트림이 완료되었음을 인식
-        print(f"Adding #EXT-X-ENDLIST to playlist for local video file...")
-        try:
-            with open(hls_output, 'a') as playlist_file:
-                playlist_file.write("#EXT-X-ENDLIST\n")
-            print(f"Successfully added #EXT-X-ENDLIST to {hls_output}")
-        except Exception as e:
-            print(f"WARNING: Failed to add #EXT-X-ENDLIST: {str(e)}")
-
-    except Exception as e:
-        error_msg = f"Video analysis failed: {str(e)}"
-        print(f"ERROR: {error_msg}")
-        print(traceback.format_exc())
-        if ffmpeg_process:
-            ffmpeg_process.kill()
-        return JSONResponse(status_code=500, content={"error": error_msg, "traceback": traceback.format_exc()})
-
-    print(f"=== Video Analysis Summary ===")
-    print(f"Total frames: {frame_count}")
-    print(f"Analyzed frames: {len(analyzed_frames)}")
-    print(f"HLS playlist: /streams/cctv{cctv_id}/playlist.m3u8")
-    print("=" * 50)
-
-# ================== 추가: LIVE RTSP STREAMING =======================
-# 휴대폰 어플을 이용해 현재 휴대폰이 연결된 WiFi 주소로 RTSP URL을 생성하고, 스트리밍 시작하면
-# 해당 RTSP URL을 이용해 실시간으로 전송되는 영상을 AI 모델이 분석하여
-# 객체 탐지 + 자세 분류를 수행하고,
-# 결과를 Spring Boot API로 전송하며, HLS 스트리밍 파일을 생성
-# ====================================================================
+# ==================================================
+# LIVE STREAM CORE
+# ==================================================
 def analyze_live_stream_sync(
     rtsp_url: str,
     cctv_id: int,
-    location_id: int,
-    spring_boot_url: str,
     output_stream_dir: str,
     conf_threshold: float,
     pose_conf_threshold: float,
     stop_event: threading.Event,
-    stream_manager: StreamManager
+    stream_manager: StreamManager,
 ):
     """
-    RTSP 라이브 스트림 분석 로직 (무한 루프)
-    stop_event가 설정될 때까지 계속 실행
+    [DEMO MODE]
+    - cctv_id: 1~4 고정
+    - HLS 디렉토리는 사전에 생성됨
+
+    [FUTURE: DYNAMIC STREAM MODE]
+    - 아래 os.makedirs(out_dir) 주석 해제
     """
-    import subprocess
-    import requests
-    import traceback
+    import subprocess, glob
+    import time
 
-    print(f"=== Live RTSP Stream Analysis Started ===")
-    print(f"RTSP URL: {rtsp_url}")
-    print(f"CCTV ID: {cctv_id}, Location ID: {location_id}")
+    out_dir = os.path.join(output_stream_dir, f"cctv{cctv_id}")
+    slot_location_id = stream_manager.streams.get(cctv_id, {}).get("location_id")
 
-    # HLS 출력 디렉토리 설정
-    stream_output_dir_path = os.path.join(output_stream_dir, f"cctv{cctv_id}")
-    os.makedirs(stream_output_dir_path, exist_ok=True)
-    hls_output = os.path.join(stream_output_dir_path, "playlist.m3u8")
+    # [FUTURE: DYNAMIC STREAM MODE]
+    # os.makedirs(out_dir, exist_ok=True)
 
-    # 기존 HLS 파일 삭제
-    import glob
-    for old_file in glob.glob(os.path.join(stream_output_dir_path, "*.ts")):
+    playlist = os.path.join(out_dir, "playlist.m3u8")
+
+    for f in glob.glob(os.path.join(out_dir, "*")):
         try:
-            os.remove(old_file)
+            os.remove(f)
         except:
             pass
-    for old_file in glob.glob(os.path.join(stream_output_dir_path, "*.m3u8")):
+
+    def open_capture():
+        cap_local = cv2.VideoCapture(rtsp_url)
+        if not cap_local.isOpened():
+            return None, None, None, None
+        fps_local = int(cap_local.get(cv2.CAP_PROP_FPS)) or 30
+        width = int(cap_local.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+        height = int(cap_local.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+        return cap_local, fps_local, width, height
+
+    def start_ffmpeg(width, height, fps_local):
         try:
-            os.remove(old_file)
-        except:
-            pass
-    print(f"Cleaned up old HLS files in {stream_output_dir_path}")
+            # 데모 기본 fps는 15로 제한; 필요 시 10~12로 낮춰 CPU/GPU 부하를 줄일 수 있음
+            target_fps = max(1, min(int(fps_local or 15), 15))
+            return subprocess.Popen([
+                "ffmpeg", "-y",
+                "-f", "rawvideo", "-pix_fmt", "bgr24",
+                "-s", f"{width}x{height}", "-r", str(target_fps),
+                "-i", "-",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-crf", "23",
+                "-maxrate", "2M",
+                "-bufsize", "4M",
+                "-g", str(target_fps),
+                "-keyint_min", str(target_fps),
+                "-sc_threshold", "0",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-flush_packets", "1",
+                "-hls_time", "1",
+                "-hls_list_size", "4",
+                "-hls_flags", "delete_segments+append_list+independent_segments+temp_file",
+                "-hls_segment_filename", os.path.join(out_dir, "segment_%03d.ts"),
+                "-f", "hls",
+                playlist
+            ], stdin=subprocess.PIPE)
+        except FileNotFoundError:
+            print(f"[CCTV {cctv_id}] ffmpeg not found; aborting stream")
+            return None
 
-    ffmpeg_process = None
-    cap = None
+    cap, fps, w, h = open_capture()
+    if cap is None:
+        print(f"[CCTV {cctv_id}] RTSP open failed; will retry until stopped")
 
-    try:
-        # RTSP 스트림 열기
-        print(f"Opening RTSP stream: {rtsp_url}")
-        cap = cv2.VideoCapture(rtsp_url)
+    ffmpeg = start_ffmpeg(w or 1280, h or 720, fps or 30) if cap else None
+    frame_count = 0
+    consecutive_failures = 0
+    max_failures_before_reconnect = 60  # ~2 seconds if 30fps
+    last_detections = []
+    last_send_ts = 0
 
-        if not cap.isOpened():
-            error_msg = f"Failed to open RTSP stream: {rtsp_url}"
-            print(f"ERROR: {error_msg}")
-            return
+    while not stop_event.is_set():
+        if cap is None or not cap.isOpened():
+            time.sleep(1)
+            cap, fps, w, h = open_capture()
+            if cap:
+                ffmpeg = ffmpeg or start_ffmpeg(w, h, fps or 30)
+                consecutive_failures = 0
+            continue
 
-        # 스트림 속성 확인
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        if fps == 0:
-            fps = 30  # 기본값 (RTSP는 FPS가 0으로 나올 수 있음)
-            print(f"WARNING: FPS is 0, using default: {fps}")
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            consecutive_failures += 1
+            if consecutive_failures >= max_failures_before_reconnect:
+                print(f"[CCTV {cctv_id}] read failures reached {consecutive_failures}; reconnecting")
+                cap.release()
+                cap = None
+            time.sleep(0.1)
+            continue
 
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        consecutive_failures = 0
 
-        print(f"Stream properties: FPS={fps}, Width={frame_width}, Height={frame_height}")
-
-        # 첫 프레임으로 실제 해상도 확인
-        ret, first_frame = cap.read()
-        if not ret:
-            print("ERROR: Failed to read first frame")
-            return
-
-        frame_height, frame_width = first_frame.shape[:2]
-        print(f"Actual frame size: {frame_width}x{frame_height}")
-
-        # 프레임 리사이즈 설정 (실시간 처리 속도 향상을 위해 480p로 설정)
-        max_height = 480
-        if frame_height > max_height:
-            resize_scale = max_height / frame_height
-            new_width = int(frame_width * resize_scale)
-            new_height = max_height
-            resize_needed = True
-            print(f"Resizing: {frame_width}x{frame_height} -> {new_width}x{new_height}")
-        else:
-            new_width = frame_width
-            new_height = frame_height
-            resize_needed = False
-
-        # 짝수로 맞추기 (H.264 요구사항)
-        new_width = new_width if new_width % 2 == 0 else new_width - 1
-        new_height = new_height if new_height % 2 == 0 else new_height - 1
-
-        # FFmpeg 프로세스 시작 (라이브 HLS 스트리밍)
-        # 실시간 스트리밍 최적화 설정
-        target_fps = min(fps, 15)  # 최대 15fps로 제한 (처리 부하 대폭 감소)
-        ffmpeg_cmd = [
-            "ffmpeg", # 원래 "ffmpeg, 로컬에서만 "/opt/homebrew/bin/ffmpeg"로 사용
-            "-y",
-            "-f", "rawvideo",
-            "-vcodec", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-s", f"{new_width}x{new_height}",
-            "-r", str(target_fps),  # 프레임레이트 (30fps로 제한)
-            "-i", "-",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-crf", "23",  # 품질 향상 (28 → 23, 낮을수록 고품질)
-            "-maxrate", "2M",  # 최대 비트레이트 2Mbps (대역폭 제한)
-            "-bufsize", "4M",  # 버퍼 크기
-            "-g", str(target_fps // 2),  # GOP 크기 (0.5초마다 키프레임, 세그먼트 길이에 맞춤)
-            "-keyint_min", str(target_fps // 2),  # 최소 키프레임 간격
-            "-sc_threshold", "0",  # 씬 체인지 감지 비활성화 (일정한 키프레임)
-            "-force_key_frames", f"expr:gte(t,n_forced*0.5)",  # 0.5초마다 강제 키프레임
-            # ========== 실시간 flush 옵션 (playlist 즉시 갱신) ==========
-            "-fflags", "+flush_packets+genpts",  # 패킷 즉시 flush + 타임스탬프 생성
-            "-flush_packets", "1",  # 패킷을 즉시 디스크에 쓰기
-            # ========== HLS 최적화 (라이브 스트리밍용 - 초저지연) ==========
-            "-hls_time", "0.5",  # 0.5초 세그먼트 (초저지연)
-            "-hls_list_size", "10",  # 최근 10개 세그먼트만 유지
-            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",  # 실시간 갱신
-            "-hls_segment_type", "mpegts",  # MPEG-TS 명시
-            "-start_number", "0",  # 세그먼트 번호 0부터 시작
-            "-hls_segment_filename", os.path.join(stream_output_dir_path, "segment_%03d.ts"),
-            hls_output
-        ]
-
-        print(f"Starting FFmpeg for live HLS...")
-        ffmpeg_process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0  # 버퍼 비활성화 (즉시 전송)
-        )
-        print(f"FFmpeg started (PID: {ffmpeg_process.pid})")
-
-        frame_count = 0
-        analysis_interval = fps * 1  # 1초마다 AI 분석
-        last_detections = []
-
-        # ========== 실시간 처리: 모든 프레임 전송, AI는 간헐적 실행 ==========
-        # frame_skip 제거: FFmpeg가 자동으로 fps 조절 (실시간 속도 유지)
-        print(f"Real-time streaming enabled: All frames sent to FFmpeg, AI analysis every {analysis_interval} frames")
-
-        # 첫 프레임 처리
-        frame = first_frame
-        if resize_needed:
-            frame = cv2.resize(frame, (new_width, new_height))
-
-        # 연속 에러 카운터 (재연결 판단용)
-        consecutive_errors = 0
-        max_consecutive_errors = 10  # 10번 연속 에러 시 재연결
-
-        while not stop_event.is_set():
-            # 프레임 읽기
-            if frame_count > 0:  # 첫 프레임은 이미 읽음
-                ret, frame = cap.read()
-
-                # ========== 프레임 읽기 실패 또는 손상된 프레임 처리 ==========
-                if not ret or frame is None:
-                    consecutive_errors += 1
-                    print(f"[CCTV {cctv_id}] Frame read error (consecutive: {consecutive_errors})")
-
-                    # 연속 에러가 많으면 재연결
-                    if consecutive_errors >= max_consecutive_errors:
-                        print(f"[CCTV {cctv_id}] Too many errors, attempting reconnect...")
-                        cap.release()
-                        cap = cv2.VideoCapture(rtsp_url)
-                        if not cap.isOpened():
-                            print(f"[CCTV {cctv_id}] ERROR: Reconnection failed")
-                            break
-                        consecutive_errors = 0
-                    continue
-
-                # 프레임 검증 (shape 확인)
-                if frame.shape[0] == 0 or frame.shape[1] == 0:
-                    print(f"[CCTV {cctv_id}] Invalid frame shape: {frame.shape}")
-                    consecutive_errors += 1
-                    continue
-
-                # 정상 프레임이면 에러 카운터 리셋
-                consecutive_errors = 0
-
-                if resize_needed:
-                    frame = cv2.resize(frame, (new_width, new_height))
-
-            # AI 분석 (1초마다)
-            if frame_count % analysis_interval == 0:
-                temp_frame_path = os.path.join(SAVE_DIR, f"temp_live_{cctv_id}.jpg")
-                cv2.imwrite(temp_frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-                # YOLO 탐지
-                print(f"[DEBUG - CCTV {cctv_id}] Frame {frame_count}: Running YOLO detection (conf_threshold={conf_threshold})")
-                yolo_result = yolo.predict(temp_frame_path, conf_threshold=conf_threshold, save_path=None)
-
-                # 탐지 결과 상세 로그
-                detections_list = yolo_result.get("detections", [])
-                print(f"[DEBUG - CCTV {cctv_id}] Frame {frame_count}: YOLO detected {len(detections_list)} objects")
-                if detections_list:
-                    for det in detections_list:
-                        print(f"  - {det.get('class')} (conf: {det.get('confidence'):.2f})")
-
-                if "detections" in yolo_result and len(detections_list) > 0:
-                    final_detections = []
-
-                    for det in yolo_result.get("detections", []):
-                        if det.get("class") == "human":
-                            box = det.get("box", {})
-                            x1, y1, x2, y2 = map(int, [box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")])
-                            cropped_img = frame[y1:y2, x1:x2]
-
-                            if cropped_img.size > 0 and pose_model is not None:
-                                detected_pose, pose_score = pose_model.predict_pose(cropped_img, pose_conf_threshold)
-                                det["pose"] = detected_pose
-                                det["pose_score"] = pose_score
-                                del cropped_img
-                            elif pose_model is None:
-                                det["pose"] = "Unknown (Model Not Loaded)"
-                                det["pose_score"] = 0.0
-
-                        final_detections.append(det)
-
-                    # Spring Boot API 호출 (numpy 타입도 변환)
-                    formatted_detections = []
-                    for det in final_detections:
-                        formatted_det = {
-                            "className": det.get("class"),
-                            "confidence": float(det.get("confidence")) if det.get("confidence") is not None else None,
-                            "box": convert_to_serializable(det.get("box")),
-                            "pose": det.get("pose"),
-                            "poseScore": float(det.get("pose_score")) if det.get("pose_score") is not None else None
-                        }
-                        formatted_detections.append(formatted_det)
-
-                    formatted_summary = {
-                        "fireCount": int(yolo_result.get("summary", {}).get("fire_count", 0)),
-                        "humanCount": int(yolo_result.get("summary", {}).get("human_count", 0)),
-                        "smokeCount": int(yolo_result.get("summary", {}).get("smoke_count", 0)),
-                        "totalObjects": int(yolo_result.get("summary", {}).get("total_objects", 0))
-                    }
-
-                    try:
-                        payload = {
-                            "aiResult": {
-                                "imagePath": temp_frame_path,
-                                "detections": formatted_detections,
-                                "summary": formatted_summary
-                            },
-                            "cctvId": cctv_id,
-                            "locationId": location_id,
-                            "videoUrl": f"{STREAM_BASE_URL}/streams/cctv{cctv_id}/playlist.m3u8"
-                        }
-
-                        response = requests.post(
-                            f"{spring_boot_url}/detections/ai-analysis",
-                            json=payload,
-                            timeout=5
-                        )
-
-                        if response.status_code == 200:
-                            print(f"[CCTV {cctv_id}] Frame {frame_count}: Detection sent to Spring Boot")
-                        else:
-                            print(f"[CCTV {cctv_id}] Frame {frame_count}: Spring Boot error - {response.status_code}")
-
-                    except Exception as e:
-                        print(f"[CCTV {cctv_id}] Frame {frame_count}: Failed to send to Spring Boot - {str(e)}")
-
-                    last_detections = final_detections
-
-            # ========== 모든 프레임을 FFmpeg로 전송 (실시간 속도 유지) ==========
-            # 바운딩 박스 그리기 (마지막 AI 분석 결과 사용)
-            if last_detections:
-                annotated_frame = draw_pose_predictions(frame, last_detections)
+        if frame_count % max(fps, 1) == 0:
+            tmp = os.path.join(SAVE_DIR, f"live_{cctv_id}.jpg")
+            if not cv2.imwrite(tmp, frame):
+                print(f"[CCTV {cctv_id}] Failed to write temp image for detection; skipping")
             else:
-                annotated_frame = frame.copy()
+                # NOTE: Ultralytics YOLO does NOT allow iou=None
+                # Default IoU threshold must be explicitly provided
+                try:
+                    det_result = yolo.predict(tmp, conf_threshold, 0.45)
+                    summary = det_result.get("summary", {})
+                    print(f"[CCTV {cctv_id}] YOLO detect fire={summary.get('fire_count')} smoke={summary.get('smoke_count')} human={summary.get('human_count')}")
 
-            # FFmpeg로 프레임 전송
+                    detections = det_result.get("detections", []) or []
+                    enriched = []
+
+                    # Pose 분류 (선택, 인간 바운딩 박스만)
+                    for item in detections:
+                        new_item = dict(item)
+                        if new_item.get("class") != "human":
+                            enriched.append(new_item)
+                            continue
+                        box = new_item.get("box", {})
+                        x1, y1, x2, y2 = box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")
+                        if None in (x1, y1, x2, y2):
+                            enriched.append(new_item)
+                            continue
+                        # 경계 안전 보정
+                        x1, y1 = max(int(x1), 0), max(int(y1), 0)
+                        x2, y2 = min(int(x2), frame.shape[1]), min(int(y2), frame.shape[0])
+                        if x2 <= x1 or y2 <= y1:
+                            enriched.append(new_item)
+                            continue
+                        new_item["box"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                        if pose_model:
+                            crop = frame[y1:y2, x1:x2]
+                            try:
+                                pose_label, pose_score = pose_model.predict_pose(crop, conf_threshold=pose_conf_threshold)
+                                new_item["pose"] = pose_label
+                                new_item["pose_score"] = pose_score
+                                print(f"[CCTV {cctv_id}] Pose={pose_label} score={pose_score:.3f} bbox=({x1},{y1},{x2},{y2})")
+                            except Exception as e:
+                                print(f"[CCTV {cctv_id}] Pose inference error: {e}")
+                        enriched.append(new_item)
+
+                    last_detections = enriched
+                except Exception as e:
+                    print(f"[CCTV {cctv_id}] YOLO inference error:", e)
+                else:
+                    # 사람이 1명도 없으면 브로드캐스트 스킵 (바운딩박스가 없는 경우 포함)
+                    has_human = any(
+                        d.get("class") == "human"
+                        and d.get("box")
+                        and all(v is not None for v in d["box"].values())
+                        and (d["box"]["x2"] - d["box"]["x1"]) > 1
+                        and (d["box"]["y2"] - d["box"]["y1"]) > 1
+                        for d in enriched
+                    )
+                    if not has_human:
+                        # 사람 미탐지 시에도 스트림은 계속 흘려보낸다
+                        last_detections = []
+                    else:
+                        # 성공적으로 추론한 시점에 Spring Boot로 비동기 전송 (1초당 1회 수준)
+                        now_ts = time.time()
+                        if now_ts - last_send_ts >= 1:
+                            last_send_ts = now_ts
+
+                            def to_py_num(val):
+                                try:
+                                    if isinstance(val, (np.integer,)):
+                                        return int(val)
+                                    if isinstance(val, (np.floating,)):
+                                        return float(val)
+                                except Exception:
+                                    pass
+                                return val
+
+                            payload = {
+                                "aiResult": {
+                                    "imagePath": det_result.get("image_path"),
+                                    "detections": [
+                                        {
+                                            "className": d.get("class"),
+                                            "confidence": to_py_num(d.get("confidence")),
+                                            "box": {
+                                                "x1": to_py_num(d.get("box", {}).get("x1")),
+                                                "y1": to_py_num(d.get("box", {}).get("y1")),
+                                                "x2": to_py_num(d.get("box", {}).get("x2")),
+                                                "y2": to_py_num(d.get("box", {}).get("y2")),
+                                            } if d.get("box") else None,
+                                            "pose": d.get("pose"),
+                                            "poseScore": to_py_num(d.get("pose_score")),
+                                        }
+                                        for d in enriched
+                                    ],
+                                    "summary": {
+                                        "fireCount": to_py_num(summary.get("fire_count")),
+                                        "humanCount": to_py_num(summary.get("human_count")),
+                                        "smokeCount": to_py_num(summary.get("smoke_count")),
+                                        "totalObjects": to_py_num(summary.get("total_objects")),
+                                    },
+                                },
+                                "cctvId": to_py_num(cctv_id),
+                                "locationId": to_py_num(slot_location_id),
+                                "videoUrl": f"{HLS_BASE_URL.rstrip('/')}/cctv{cctv_id}/playlist.m3u8",
+                            }
+
+                            def _send_payload(data):
+                                try:
+                                    resp = requests.post(
+                                            SPRING_BOOT_AI_ENDPOINT,
+                                            json=data,
+                                            timeout=3,
+                                    )
+                                    if resp.status_code >= 300:
+                                        print(f"[CCTV {cctv_id}] SpringBoot AI push failed: {resp.status_code} {resp.text}")
+                                except Exception as e:
+                                    print(f"[CCTV {cctv_id}] SpringBoot AI push error: {e}")
+
+                            threading.Thread(target=_send_payload, args=(payload,), daemon=True).start()
+
+        # 바운딩 박스/포즈 오버레이 (최근 추론 결과를 사용)
+        if last_detections:
+            for item in last_detections:
+                box = item.get("box", {})
+                x1, y1, x2, y2 = box.get("x1"), box.get("y1"), box.get("x2"), box.get("y2")
+                if None in (x1, y1, x2, y2):
+                    continue
+                cls = item.get("class", "obj")
+                conf = item.get("confidence", 0.0)
+                pose_lbl = item.get("pose")
+                pose_score = item.get("pose_score")
+                color = (0, 255, 0) if cls == "human" else (0, 0, 255) if "fire" in cls else (128, 128, 128)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                label = f"{cls}:{conf:.2f}"
+                if pose_lbl:
+                    label = f"{label} | {pose_lbl}:{pose_score:.2f}"
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw, y1), color, -1)
+                cv2.putText(frame, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        if ffmpeg and ffmpeg.poll() is None:
             try:
-                ffmpeg_process.stdin.write(annotated_frame.tobytes())
-            except BrokenPipeError:
-                print("FFmpeg pipe broken")
-                break
+                ffmpeg.stdin.write(frame.tobytes())
+            except Exception as e:
+                print(f"[CCTV {cctv_id}] ffmpeg write error: {e}; restarting ffmpeg")
+                try:
+                    ffmpeg.terminate()
+                except Exception:
+                    pass
+                ffmpeg = start_ffmpeg(w, h, fps or 30)
+        else:
+            ffmpeg = start_ffmpeg(w, h, fps or 30)
 
-            del annotated_frame
+        frame_count += 1
+        if frame_count % 100 == 0:
+            stream_manager.update_frame_count(cctv_id, frame_count)
 
-            frame_count += 1
-
-            # 프레임 카운트 업데이트
-            if frame_count % 100 == 0:
-                stream_manager.update_frame_count(cctv_id, frame_count)
-                print(f"[CCTV {cctv_id}] Processed {frame_count} frames")
-
-        print(f"[CCTV {cctv_id}] Stream stopped (total frames: {frame_count})")
-
-    except Exception as e:
-        print(f"[CCTV {cctv_id}] ERROR: {str(e)}")
-        print(traceback.format_exc())
-
-    finally:
-        # 리소스 정리
-        if cap:
-            cap.release()
-        if ffmpeg_process:
-            try:
-                ffmpeg_process.stdin.close()
-                ffmpeg_process.terminate()
-                ffmpeg_process.wait(timeout=5)
-            except:
-                ffmpeg_process.kill()
-        print(f"[CCTV {cctv_id}] Resources cleaned up")
-
-# ============ LIVE STREAMING API ENDPOINTS ============
-@app.post("/start_live_stream")
-async def start_live_stream(request: StartLiveStreamRequest):
-    """
-    RTSP 라이브 스트림 시작
-    """
-    success = stream_manager.start_stream(
-        cctv_id=request.cctv_id,
-        rtsp_url=request.rtsp_url,
-        location_id=request.location_id,
-        conf_threshold=request.conf_threshold,
-        pose_conf_threshold=request.pose_conf_threshold
-    )
-
-    if success:
-        return JSONResponse(content={
-            "status": "success",
-            "message": f"Live stream started for CCTV {request.cctv_id}",
-            "cctv_id": request.cctv_id,
-            "rtsp_url": request.rtsp_url,
-            "hls_url": f"{STREAM_BASE_URL}/streams/cctv{request.cctv_id}/playlist.m3u8"
-        })
-    else:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": f"Stream {request.cctv_id} is already running or failed to start"
-            }
-        )
-
-@app.post("/stop_live_stream")
-async def stop_live_stream(request: StopLiveStreamRequest):
-    """
-    RTSP 라이브 스트림 중지
-    """
-    success = stream_manager.stop_stream(request.cctv_id)
-
-    if success:
-        return JSONResponse(content={
-            "status": "success",
-            "message": f"Live stream stopped for CCTV {request.cctv_id}",
-            "cctv_id": request.cctv_id
-        })
-    else:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "status": "error",
-                "message": f"Stream {request.cctv_id} not found or not running"
-            }
-        )
-
-@app.get("/stream_status/{cctv_id}")
-async def get_stream_status(cctv_id: int):
-    """
-    스트림 상태 조회
-    """
-    status = stream_manager.get_status(cctv_id)
-
-    if status:
-        return JSONResponse(content=status)
-    else:
-        return JSONResponse(content={
-            "cctv_id": cctv_id,
-            "is_streaming": False,
-            "rtsp_url": None,
-            "started_at": None,
-            "frame_count": None
-        })
-
-# ----------------- RUN -----------------
-if __name__ == "__main__":
-    uvicorn.run("service:app", host="0.0.0.0", port=8000, reload=True)
+    if cap:
+        cap.release()
+    if ffmpeg:
+        try:
+            ffmpeg.stdin.close()
+            ffmpeg.terminate()
+        except Exception:
+            pass
+    print(f"[CCTV {cctv_id}] stopped")

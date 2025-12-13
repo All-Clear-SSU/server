@@ -78,18 +78,20 @@ public class WifiDetectionMqttService {
             webSocketService.broadcastWifiSignal(mqttData.getSensorId(), signalDto);
             log.debug("WebSocket 브로드캐스트 완료 - 토픽: /topic/wifi-sensor/{}/signal", mqttData.getSensorId());
 
-            // 8. 생존자가 탐지된 경우에만 추가 처리를 수행함
+            // 8. ✅ 생존자 탐지 여부와 무관하게 항상 처리를 수행함 (false 신호도 웹에 표시)
             if (Boolean.TRUE.equals(mqttData.getSurvivorDetected())) {
                 log.info("⚠️ 생존자 탐지됨! 센서: {}, 위치: {}",
                         mqttData.getSensorId(), location.getFullAddress());
-
-                // 생존자 매칭 및 Detection 레코드 DB 저장을 수행함
-                wifiDetectionProcessorService.processDetection(mqttData, sensor, location, signalDto, timestamp);
-
-                log.info("생존자 탐지 처리 완료 - 센서: {}", mqttData.getSensorId());
             } else {
-                log.debug("생존자 미탐지 - 센서: {}, WebSocket 브로드캐스트만 수행", mqttData.getSensorId());
+                log.debug("생존자 미탐지 - 센서: {}, 위치: {}",
+                        mqttData.getSensorId(), location.getFullAddress());
             }
+
+            // 생존자 매칭 및 Detection 레코드 DB 저장을 수행함 (탐지 여부와 무관)
+            wifiDetectionProcessorService.processDetection(mqttData, sensor, location, signalDto, timestamp);
+
+            log.info("WiFi 센서 처리 완료 - 센서: {}, 생존자 탐지: {}",
+                    mqttData.getSensorId(), mqttData.getSurvivorDetected());
 
         } catch (IllegalArgumentException e) {
             // 센서 또는 위치를 찾을 수 없는 경우의 예외 처리
