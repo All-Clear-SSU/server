@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import opensource.project.dto.DetectionResponseDto;
 import opensource.project.dto.PriorityScoreHistoryDto;
+import opensource.project.dto.RecentSurvivorRecordResponseDto;
 import opensource.project.dto.SurvivorResponseDto;
 import opensource.project.dto.WifiSignalDto;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -96,4 +97,20 @@ public class WebSocketServiceImpl implements WebSocketService {
                     signalData.getSurvivorDetected());
         }
     }
+
+    @Override
+    public void broadcastRecentRecordAdded(RecentSurvivorRecordResponseDto record) {
+        String destination = "/topic/recent-survivors";
+        messagingTemplate.convertAndSend(destination, new RecentRecordEvent("added", record, null));
+        log.info("Broadcasting recent record added to {}", destination);
+    }
+
+    @Override
+    public void broadcastRecentRecordDeleted(Long recordId) {
+        String destination = "/topic/recent-survivors";
+        messagingTemplate.convertAndSend(destination, new RecentRecordEvent("deleted", null, recordId));
+        log.info("Broadcasting recent record deleted to {}: {}", destination, recordId);
+    }
+
+    private record RecentRecordEvent(String type, RecentSurvivorRecordResponseDto record, Long recordId) {}
 }

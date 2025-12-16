@@ -1,5 +1,6 @@
 package opensource.project.service;
 
+import opensource.project.domain.enums.DeleteReason;
 import opensource.project.domain.enums.DetectionMethod;
 import opensource.project.domain.enums.RescueStatus;
 import opensource.project.dto.PriorityScoreHistoryDto;
@@ -26,7 +27,7 @@ public interface SurvivorService {
     SurvivorResponseDto updateSurvivor(Long id, SurvivorRequestDto requestDto);
 
     // 생존자 목록에서 해당 id의 생존자를 제거
-    void deleteSurvivor(Long id);
+    void deleteSurvivor(Long id, DeleteReason reason);
 
     // 구조 상태 변경
     SurvivorResponseDto updateRescueStatus(Long id, RescueStatus rescueStatus);

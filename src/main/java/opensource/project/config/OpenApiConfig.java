@@ -119,4 +119,28 @@ public class OpenApiConfig {
                 .pathsToMatch("/test/wifi-sensor/**")
                 .build();
     }
+
+    @Bean
+    public GroupedOpenApi buildingApi() {
+        return GroupedOpenApi.builder()
+                .group("12. Building API")
+                .pathsToMatch("/buildings/**")
+                .build();
+    }
+
+    @Bean
+    public GroupedOpenApi recentSurvivorRecordApi() {
+        return GroupedOpenApi.builder()
+                .group("13. Recent Survivor Record API")
+                .pathsToMatch("/recent-survivors/**")
+                .build();
+    }
+
+    @Bean
+    public GroupedOpenApi wifiDetectionApi() {
+        return GroupedOpenApi.builder()
+                .group("14. WiFi Detection API")
+                .pathsToMatch("/wifi-detections/**")
+                .build();
+    }
 }

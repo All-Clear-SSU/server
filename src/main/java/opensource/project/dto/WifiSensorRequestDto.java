@@ -17,6 +17,8 @@ public class WifiSensorRequestDto {
     @NotNull(message = "상태는 필수입니다")
     private SensorStatus status;
 
+    private String csiTopic;
+
     private Integer signalStrength;
 
     private Double detectionRadius;

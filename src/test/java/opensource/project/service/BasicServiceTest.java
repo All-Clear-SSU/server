@@ -104,7 +104,8 @@ class BasicServiceTest {
 
         // then - 생성 확인
         assertThat(createdSensor).isNotNull();
-        assertThat(createdSensor.getSensorCode()).isEqualTo("SENSOR-001");
+        // sensorCode는 타임스탬프 기반 자동 생성 -> ID 존재 여부만 검증
+        assertThat(createdSensor.getId()).isNotNull();
         assertThat(createdSensor.getStatus()).isEqualTo(SensorStatus.ACTIVE);
         assertThat(createdSensor.getIsActive()).isTrue();
 

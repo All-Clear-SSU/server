@@ -24,7 +24,7 @@ from yolo_pose_model import YOLOPoseOnnx
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MODEL_PATH = os.path.join(BASE_DIR, "model", "best_human.onnx")
-COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11m.onnx")
+COCO_MODEL_PATH = os.path.join(BASE_DIR, "model", "yolo11m.onnx")   # n, s, m, x 선택해서 유동적으로
 POSE_MODEL_PATH = os.path.join(BASE_DIR, "model", "best_pose.onnx")
 
 CLASS_NAMES = ["fire", "human", "smoke"]
@@ -45,14 +45,14 @@ STREAM_OUTPUT_DIR = "/home/ubuntu/streams"
 
 # [DEMO MODE – ENABLED]
 # 시연에서는 CCTV가 최대 4대이므로 디렉토리를 미리 생성한다.
-for i in range(1, MAX_CCTV + 1):
-    os.makedirs(os.path.join(STREAM_OUTPUT_DIR, f"cctv{i}"), exist_ok=True)
+#for i in range(1, MAX_CCTV + 1):
+#    os.makedirs(os.path.join(STREAM_OUTPUT_DIR, f"cctv{i}"), exist_ok=True)
 
 # [FUTURE: DYNAMIC STREAM MODE]
-# 아래 사전 디렉토리 생성 로직을 제거하고
+# 위 사전 디렉토리 생성을 주석 처리하고
 # analyze_live_stream_sync 내부에서 동적 생성하도록 변경한다.
 
-DEFAULT_DETECTION_CONF_THRESHOLD = 0.3
+DEFAULT_DETECTION_CONF_THRESHOLD = 0.7
 DEFAULT_POSE_CONF_THRESHOLD = 0.3
 
 # ==================================================
@@ -104,10 +104,10 @@ class StreamManager:
         # DEMO MODE – ENABLED
         # ===============================
         # CCTV 스트림을 1~4번 슬롯으로 고정한다.
-        self.streams: Dict[int, Dict] = {
-            i: self._create_stream_slot()
-            for i in range(1, MAX_CCTV + 1)
-        }
+        #self.streams: Dict[int, Dict] = {
+        #    i: self._create_stream_slot()
+        #    for i in range(1, MAX_CCTV + 1)
+        #}
 
         # ===============================
         # FUTURE: DYNAMIC STREAM MODE
@@ -115,7 +115,7 @@ class StreamManager:
         # 아래 한 줄을 활성화하고 위 DEMO MODE 블록을 주석 처리하면
         # 가변 스트림 구조로 즉시 전환 가능하다.
         # ---------------------------------
-        # self.streams: Dict[int, Dict] = {}
+        self.streams: Dict[int, Dict] = {}
         # ---------------------------------
 
     def _create_stream_slot(self):
@@ -135,24 +135,24 @@ class StreamManager:
         # ===============================
         # DEMO MODE – ENABLED
         # ===============================
-        if cctv_id not in self.streams:
-            raise ValueError("cctv_id must be between 1 and 4 for demo")
+        #if cctv_id not in self.streams:
+        #    raise ValueError("cctv_id must be between 1 and 4 for demo")
 
         # ===============================
         # FUTURE: DYNAMIC STREAM MODE
         # ===============================
         # 아래 검증을 사용하려면 위 DEMO MODE 검증을 주석 처리한다.
         # ---------------------------------
-        # if not isinstance(cctv_id, int):
-        #     raise ValueError("cctv_id must be int")
+        if not isinstance(cctv_id, int):
+            raise ValueError("cctv_id must be int")
         # ---------------------------------
 
     def start_stream(self, cctv_id: int, rtsp_url: str, location_id: int,
                      conf_threshold: float, pose_conf_threshold: float) -> bool:
         with self.lock:
             # [FUTURE: DYNAMIC STREAM MODE]
-            # if cctv_id not in self.streams:
-            #     self.streams[cctv_id] = self._create_stream_slot()
+            if cctv_id not in self.streams:
+                self.streams[cctv_id] = self._create_stream_slot()
 
             self._validate_id(cctv_id)
             slot = self.streams[cctv_id]
@@ -278,7 +278,7 @@ def analyze_live_stream_sync(
     slot_location_id = stream_manager.streams.get(cctv_id, {}).get("location_id")
 
     # [FUTURE: DYNAMIC STREAM MODE]
-    # os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
     playlist = os.path.join(out_dir, "playlist.m3u8")
 
