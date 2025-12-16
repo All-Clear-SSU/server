@@ -17,6 +17,7 @@ public class WifiSensorResponseDto {
     private String sensorCode;
     private Long locationId;
     private LocationResponseDto location;
+    private String csiTopic;
     private SensorStatus status;
     private Integer signalStrength;
     private Double detectionRadius;
@@ -31,6 +32,7 @@ public class WifiSensorResponseDto {
                 .sensorCode(wifiSensor.getSensorCode())
                 .locationId(wifiSensor.getLocation().getId())
                 .location(LocationResponseDto.from(wifiSensor.getLocation()))
+                .csiTopic(wifiSensor.getCsiTopic())
                 .status(wifiSensor.getStatus())
                 .signalStrength(wifiSensor.getSignalStrength())
                 .detectionRadius(wifiSensor.getDetectionRadius())
@@ -46,6 +48,7 @@ public class WifiSensorResponseDto {
                 .id(wifiSensor.getId())
                 .sensorCode(wifiSensor.getSensorCode())
                 .locationId(wifiSensor.getLocation().getId())
+                .csiTopic(wifiSensor.getCsiTopic())
                 .status(wifiSensor.getStatus())
                 .signalStrength(wifiSensor.getSignalStrength())
                 .detectionRadius(wifiSensor.getDetectionRadius())

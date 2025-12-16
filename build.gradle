@@ -53,6 +53,9 @@ dependencies {
     //lombok 라이브러리 추가 끝
 
     runtimeOnly 'com.oracle.database.jdbc:ojdbc11:23.2.0.0'
+    
+    // H2 DB (테스트용)
+    testRuntimeOnly 'com.h2database:h2'
 
 	implementation 'org.springframework.boot:spring-boot-starter'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'

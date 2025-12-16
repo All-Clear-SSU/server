@@ -29,6 +29,9 @@ public class WifiSensor {
     @JoinColumn(name = "location_id", nullable = false)
     private Location location;
 
+    @Column(length = 200)
+    private String csiTopic;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private SensorStatus status;

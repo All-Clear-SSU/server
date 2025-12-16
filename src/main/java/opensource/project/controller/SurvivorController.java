@@ -2,6 +2,7 @@ package opensource.project.controller;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import opensource.project.domain.enums.DeleteReason;
 import opensource.project.domain.enums.DetectionMethod;
 import opensource.project.domain.enums.RescueStatus;
 import opensource.project.dto.PriorityScoreHistoryDto;
@@ -53,8 +54,11 @@ public class SurvivorController {
 
     //'오탐(False Positive) 보고' 버튼 클릭 시 활용, 해당 생존자를 생존자 목록에서 제거
     @DeleteMapping("/{id}")
-    public ResponseEntity<String> deleteSurvivor(@PathVariable Long id) {
-        survivorService.deleteSurvivor(id);
+    public ResponseEntity<String> deleteSurvivor(
+            @PathVariable Long id,
+            @RequestParam(name = "reason", defaultValue = "MANUAL") DeleteReason reason
+    ) {
+        survivorService.deleteSurvivor(id, reason);
         return ResponseEntity.ok("Survivor deleted successfully");
     }
 

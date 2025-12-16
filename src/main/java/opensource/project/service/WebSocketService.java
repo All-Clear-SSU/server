@@ -56,4 +56,16 @@ public interface WebSocketService {
      * @param signalData 신호 데이터 (CSI 분석 결과, 신호 강도, 생존자 탐지 여부 등 포함)
      */
     void broadcastWifiSignal(Long sensorId, WifiSignalDto signalData);
+
+    /**
+     * 최근 생존자 기록(타임아웃 스냅샷) 추가 브로드캐스트
+     * 구독 토픽: /topic/recent-survivors
+     */
+    void broadcastRecentRecordAdded(opensource.project.dto.RecentSurvivorRecordResponseDto record);
+
+    /**
+     * 최근 생존자 기록 삭제 브로드캐스트
+     * 구독 토픽: /topic/recent-survivors
+     */
+    void broadcastRecentRecordDeleted(Long recordId);
 }
